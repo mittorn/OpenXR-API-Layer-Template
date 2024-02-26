@@ -57,6 +57,7 @@ private:
 	PFN_xrGetInstanceProcAddr nextLayer_xrGetInstanceProcAddr;
 	static std::vector<const char*> extensions;
 	std::unordered_map<std::string, ShimFunction> functions;
+	XrInstance dispatchInstance;
 };
 
 #define GetPFN(name) PFN_##name

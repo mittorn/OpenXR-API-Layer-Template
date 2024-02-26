@@ -89,9 +89,14 @@ void OpenXRLayer::LoadDispatchTable(XrInstance instance)
 	for (auto& [functionName, shim] : functions)
 		if (XR_SUCCEEDED(nextLayer_xrGetInstanceProcAddr(instance, functionName.c_str(), &functionPointer)))
 			shim.nextLayer_xrFunction = functionPointer;
+	dispatchInstance = instance;
 }
 
 PFN_xrVoidFunction OpenXRLayer::GetNextLayer(const std::string& function)
 {
-	return functions.at(function).nextLayer_xrFunction;
+	if(functions.find(function) != functions.end())
+		return functions.at(function).nextLayer_xrFunction;
+	PFN_xrVoidFunction functionPointer = nullptr;
+	nextLayer_xrGetInstanceProcAddr(dispatchInstance, function.c_str(), &functionPointer);
+	return functionPointer;
 }
