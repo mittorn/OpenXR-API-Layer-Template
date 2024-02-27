@@ -12,12 +12,68 @@
 #include <stdio.h>
 
 //Define next function pointer
-#define NEXT_FUNC(x) PFN_##x nextLayer_##x
+#define DECLARE_NEXT_FUNC(x) PFN_##x nextLayer_##x
 //Load next function pointer
-#define LOAD_FUNC(x) nextLayer_xrGetInstanceProcAddr(mInstance, #x, (PFN_xrVoidFunction*)&nextLayer_##x)
+#define LOAD_NEXT_FUNC(x) nextLayer_xrGetInstanceProcAddr(mInstance, #x, (PFN_xrVoidFunction*)&nextLayer_##x)
 
+
+
+#include <unordered_map>
+#include <vector>
 struct Layer
 {
+#if 0
+#include "./HashMap.h"
+struct MyKeyHash {
+	unsigned long operator()(const void *key) const
+	{
+		return (uintptr_t)key % 10;
+	}
+};
+template<class Key, class T>
+using Map =  HashMap<Key, T, 10, MyKeyHash>;
+#else
+template<class Key, class T>
+using Map = std::unordered_map<Key, T>;
+
+#endif
+
+Map<XrAction, XrActionCreateInfo> gActionInfos;
+
+
+struct InputWrapper
+{
+	XrSession mSession;
+	std::vector<XrActionSet> mActionSets;
+};
+
+struct ActionSet
+{
+	XrActionSetCreateInfo info;
+	XrInstance instance;
+	std::vector<XrAction> mActions;
+};
+Map<XrActionSet, ActionSet> gActionSetInfos;
+
+Map<XrSession, InputWrapper*> gWrappers;
+InputWrapper *gLastWrapper;
+#if 0
+InputWrapper *GetWrapper(XrSession session)
+{
+	if(gLastWrapper && gLastWrapper->mSession == session)
+		return gLastWrapper;
+
+	InputWrapper * w = 0;
+	gWrappers.get(session,w);
+	if(!w)
+	{
+		w = new InputWrapper;
+		w->mSession = session;
+		gWrappers.put(session,w);
+	}
+	return w;
+}
+#endif
 	// maximum active instances loaded in class
 	// normally it should be 1, but reserve more in case some library checks OpenXR
 	constexpr static size_t max_instances = 4;
@@ -31,11 +87,23 @@ struct Layer
 	uint32_t mExtensionsCount;
 
 	// Always need this for instance creation/destroy
-	NEXT_FUNC(xrGetInstanceProcAddr);
-	NEXT_FUNC(xrDestroyInstance);
+	DECLARE_NEXT_FUNC(xrGetInstanceProcAddr);
+	DECLARE_NEXT_FUNC(xrDestroyInstance);
+#define NEXT_FUNC(f, x) f(x)
 
 	// Declare all used OpenXR functions here
-	NEXT_FUNC(xrEndFrame);
+#define NEXT_FUNC_LIST(f) \
+	NEXT_FUNC(f, xrCreateAction); \
+	NEXT_FUNC(f, xrCreateActionSet); \
+	NEXT_FUNC(f, xrEnumerateBoundSourcesForAction); \
+	NEXT_FUNC(f, xrPathToString); \
+	NEXT_FUNC(f, xrGetInputSourceLocalizedName); \
+	NEXT_FUNC(f, xrAttachSessionActionSets); \
+	NEXT_FUNC(f, xrStringToPath); \
+	NEXT_FUNC(f, xrGetCurrentInteractionProfile); \
+	NEXT_FUNC(f, xrPollEvent)
+
+	NEXT_FUNC_LIST(DECLARE_NEXT_FUNC);
 
 	// Find Layer index for XrInstance
 	static int FindInstance(XrInstance inst)
@@ -50,10 +118,10 @@ struct Layer
 		mInstance = inst;
 		// Need this for LOAD_FUNC
 		nextLayer_xrGetInstanceProcAddr = gpa;
-		LOAD_FUNC(xrDestroyInstance);
+		LOAD_NEXT_FUNC(xrDestroyInstance);
 
 		// Load all used OpenXR functions here
-		LOAD_FUNC(xrEndFrame);
+		NEXT_FUNC_LIST(LOAD_NEXT_FUNC);
 
 		// Swap extensions list
 		delete[] mExtensions;
@@ -69,23 +137,139 @@ struct Layer
 				return true;
 		return false;
 	}
-
-	//Define the functions implemented in this layer like this:
-	XrResult thisLayer_xrEndFrame(XrSession session,
-		const XrFrameEndInfo* frameEndInfo)
+	XrResult thisLayer_xrCreateAction (XrActionSet actionSet, const XrActionCreateInfo *info, XrAction *action)
 	{
-		//Do some additional things;
-		printf("Display frame time is %llu\n", (unsigned long long)frameEndInfo->displayTime);
+		XrAction act;
+		XrResult r = nextLayer_xrCreateAction(actionSet, info, &act);
+		if(r == XR_SUCCESS)
+		{
+			*action = act;
+			gActionInfos[act] = *info;
+			gActionSetInfos[actionSet].mActions.push_back(act);
+		}
+		return r;
+	}
+	XrResult thisLayer_xrCreateActionSet (XrInstance instance, const XrActionSetCreateInfo *info, XrActionSet *actionSet)
+	{
+		XrActionSet acts;
+		XrResult r = nextLayer_xrCreateActionSet(instance, info, &acts);
+		if(r == XR_SUCCESS)
+		{
+			*actionSet = acts;
+			gActionSetInfos[acts] = ActionSet{*info, instance};
+		}
+		return r;
+	}
 
-		//Call down the chain
-		XrResult result = nextLayer_xrEndFrame(session, frameEndInfo);
+	void DumpActionSet(XrSession session, XrActionSet s)
+	{
+		ActionSet &seti = gActionSetInfos[s];
+		printf("Attached action set: %s %s\n", seti.info.actionSetName, seti.info.localizedActionSetName );
+		for(XrAction a: seti.mActions)
+		{
+			XrActionCreateInfo &cinfo = gActionInfos[a];
+			printf("info %p: %s %s\n", (void*)a, cinfo.actionName, cinfo.localizedActionName);
+			XrBoundSourcesForActionEnumerateInfo einfo = {XR_TYPE_BOUND_SOURCES_FOR_ACTION_ENUMERATE_INFO};
+			einfo.action = a;
+			uint32_t count;
+			nextLayer_xrEnumerateBoundSourcesForAction(session, &einfo, 0, &count, NULL);
+			XrPath paths[count];
+			nextLayer_xrEnumerateBoundSourcesForAction(session, &einfo, count, &count, paths);
+			for(int j = 0; j < count; j++)
+			{
+				uint32_t slen;
+				XrInputSourceLocalizedNameGetInfo linfo = {XR_TYPE_INPUT_SOURCE_LOCALIZED_NAME_GET_INFO};
+				linfo.sourcePath = paths[j];
+				linfo.whichComponents = XR_INPUT_SOURCE_LOCALIZED_NAME_USER_PATH_BIT | XR_INPUT_SOURCE_LOCALIZED_NAME_INTERACTION_PROFILE_BIT | XR_INPUT_SOURCE_LOCALIZED_NAME_COMPONENT_BIT;
+				nextLayer_xrGetInputSourceLocalizedName(session, &linfo, 0, &slen, NULL);
+				{
+					char str[slen + 1];
+					nextLayer_xrGetInputSourceLocalizedName(session, &linfo, slen + 1, &slen, str);
+					printf("Description %s\n", str);
+				}
+				nextLayer_xrPathToString(seti.instance, paths[j], 0, &slen, NULL);
+				{
+					char str[slen + 1];
+					nextLayer_xrPathToString(seti.instance, paths[j], slen + 1, &slen, str);
+					printf("raw_path %s\n", str);
+				}
+			}
+		}
+	}
 
-		//Maybe do something with the original return value?
-		if(result == XR_ERROR_TIME_INVALID)
-			printf("frame time is invalid?\n");
+	XrResult thisLayer_xrAttachSessionActionSets (XrSession session, const XrSessionActionSetsAttachInfo *info)
+	{
+		XrResult r = nextLayer_xrAttachSessionActionSets(session, info);
+		if(r == XR_SUCCESS)
+		{
+			InputWrapper *& w = gWrappers[session];
+			if(!w)
+			{
+				w = new InputWrapper;
+				w->mSession = session;
+				for(int i = 0; i < info->countActionSets; i++)
+				{
+					XrActionSet s = info->actionSets[i];
+					w->mActionSets.push_back(info->actionSets[i]);
+					DumpActionSet(session,s);
+				}
 
-		//Return what should be returned as if you were the actual function
-		return result;
+			}
+
+		}
+		return r;
+	}
+
+
+	XrResult thisLayer_xrPollEvent(
+		XrInstance instance, XrEventDataBuffer* eventData)
+	{
+		XrResult res = nextLayer_xrPollEvent(instance, eventData);
+
+		if(res == XR_SUCCESS)
+		{
+			static XrSession lastSession;
+			if(eventData->type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED)
+			{
+				XrEventDataSessionStateChanged *eSession = (XrEventDataSessionStateChanged*) eventData;
+				if(eSession->state >= XR_SESSION_STATE_IDLE && eSession->state <= XR_SESSION_STATE_FOCUSED)
+					lastSession = eSession->session;
+			}
+
+			if(eventData->type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED && lastSession)
+			{
+				InputWrapper *w = gWrappers[lastSession];
+				const char * const userPaths[] = {
+					"/user/hand/left",
+					"/user/hand/right",
+					"/user/head",
+					"/user/gamepad",
+					//				"/user/treadmill"
+				};
+				if(!w)
+					return res;
+
+				XrInteractionProfileState state = {XR_TYPE_INTERACTION_PROFILE_STATE};
+				for(int i = 0; i < sizeof(userPaths)/sizeof(userPaths[0]); i++)
+				{
+					XrPath path;
+					if(nextLayer_xrStringToPath(instance, userPaths[i], &path) != XR_SUCCESS)
+						continue;
+					if(nextLayer_xrGetCurrentInteractionProfile(lastSession, path, &state) != XR_SUCCESS)
+						continue;
+					if(state.interactionProfile == XR_NULL_PATH)
+						continue;
+					char profileStr[XR_MAX_PATH_LENGTH];
+					uint32_t len;
+					nextLayer_xrPathToString(instance, state.interactionProfile, XR_MAX_PATH_LENGTH, &len, profileStr);
+					printf("New interaction profile for %s: %s\n", userPaths[i], profileStr );
+				}
+				for(XrActionSet s: w->mActionSets)
+					DumpActionSet(lastSession, s);
+			}
+		}
+
+		return res;
 	}
 
 	//IMPORTANT: to allow for multiple instance creation/destruction, the contect of the layer must be re-initialized when the instance is being destroyed.
@@ -202,7 +386,10 @@ XrResult thisLayer_xrGetInstanceProcAddr(XrInstance instance, const char* name, 
 	WRAP_FUNC(xrDestroyInstance);
 
 	//List every functions that should be overriden
-	WRAP_FUNC(xrEndFrame);
+	WRAP_FUNC(xrCreateAction);
+	WRAP_FUNC(xrCreateActionSet);
+	WRAP_FUNC(xrAttachSessionActionSets);
+	WRAP_FUNC(xrPollEvent);
 
 #if XR_THISLAYER_HAS_EXTENSIONS
 	if(Layer::mInstances[i].IsExtensionEnabled("XR_TEST_test_me"))
