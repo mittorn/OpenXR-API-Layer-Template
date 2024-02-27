@@ -7,10 +7,10 @@
 #ifdef _WIN32
 
 #include "layer_config.hpp"
-#include <cstdio>
+#include <stdio.h>
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
-#include <Windows.h>
+#include <windows.h>
 
 BOOL WINAPI DllMain(HINSTANCE /*hinstDLL*/, DWORD fdwReason, LPVOID /*lpReserved*/)
 {

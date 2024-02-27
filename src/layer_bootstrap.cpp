@@ -1,5 +1,7 @@
 // SPDX-FileCopyrightText: 2021-2023 Arthur Brainville (Ybalrid) <ybalrid@ybalrid.info>
 //
+// SPDX-FileCopyrightText: 2024 mittorn <mittorn@disroot.org>
+//
 // SPDX-License-Identifier: MIT
 //
 // Initial Author: Arthur Brainville <ybalrid@ybalrid.info>
@@ -7,7 +9,7 @@
 #include "layer_bootstrap.hpp"
 #include "layer_shims.hpp"
 #include "layer_config.hpp"
-#include <cstring>
+#include <string.h>
 
 extern "C" XrResult LAYER_EXPORT XRAPI_CALL xrNegotiateLoaderApiLayerInterface(const XrNegotiateLoaderInfo * loaderInfo, const char* apiLayerName,
 	XrNegotiateApiLayerRequest* apiLayerRequest)
@@ -56,13 +58,17 @@ XrResult thisLayer_xrCreateApiLayerInstance(const XrInstanceCreateInfo* info, co
 	newApiLayerCreateInfo.nextInfo = apiLayerInfo->nextInfo->next;
 
 	XrInstanceCreateInfo instanceCreateInfo = *info;
-	std::vector<const char*> extension_list_without_implemented_extensions;
-	std::vector<const char*> enabled_this_layer_extensions;
+	const char **extension_list_without_implemented_extensions = nullptr;
+	const char **enabled_this_layer_extensions = nullptr;
+	uint32_t extension_list_without_implemented_extensions_count = 0;
+	uint32_t enabled_this_layer_extensions_count = 0;
 
 	//If we deal with extensions, we will check the list of enabled extensions.
 	//We remove ours form the list if present, and we store the list of *our* extensions that were enabled
 	#if XR_THISLAYER_HAS_EXTENSIONS
 	{
+		extension_list_without_implemented_extensions = new const char*[instanceCreateInfo.enabledExtensionCount];
+		enabled_this_layer_extensions = new const char*[sizeof(enabled_this_layer_extensions)/sizeof(enabled_this_layer_extensions[0])];
 		for (size_t enabled_extension_index = 0; enabled_extension_index < instanceCreateInfo.enabledExtensionCount; ++enabled_extension_index)
 		{
 			const char* enabled_extension_name = instanceCreateInfo.enabledExtensionNames[enabled_extension_index];
@@ -78,20 +84,16 @@ XrResult thisLayer_xrCreateApiLayerInstance(const XrInstanceCreateInfo* info, co
 			}
 
 			if(implemented_by_us)
-				enabled_this_layer_extensions.push_back(enabled_extension_name);
+				enabled_this_layer_extensions[enabled_this_layer_extensions_count++] = enabled_extension_name;
 			else
-				extension_list_without_implemented_extensions.push_back(enabled_extension_name);
+				extension_list_without_implemented_extensions[extension_list_without_implemented_extensions_count++] = enabled_extension_name;
 		}
 
-		instanceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(extension_list_without_implemented_extensions.size());
-		instanceCreateInfo.enabledExtensionNames = extension_list_without_implemented_extensions.data();
-		OpenXRLayer::SetEnabledExtensions(enabled_this_layer_extensions);
+		instanceCreateInfo.enabledExtensionCount = extension_list_without_implemented_extensions_count;
+		instanceCreateInfo.enabledExtensionNames = extension_list_without_implemented_extensions;
 	}
 #endif
 
-
-	//This is the real "bootstrap" of this layer's
-	OpenXRLayer::CreateLayerContext(apiLayerInfo->nextInfo->nextGetInstanceProcAddr, ListShims());
 
 	XrInstance newInstance = *instance;
 	const auto result = apiLayerInfo->nextInfo->nextCreateApiLayerInstance(&instanceCreateInfo, &newApiLayerCreateInfo, &newInstance);
@@ -100,13 +102,10 @@ XrResult thisLayer_xrCreateApiLayerInstance(const XrInstanceCreateInfo* info, co
 		return XR_ERROR_LAYER_INVALID;
 	}
 
-	OpenXRLayer::GetLayerContext().LoadDispatchTable(newInstance);
+	CreateLayerInstance(newInstance, apiLayerInfo->nextInfo->nextGetInstanceProcAddr, enabled_this_layer_extensions, enabled_this_layer_extensions_count);
 
 	*instance = newInstance;
 	return result;
 }
 
-XrResult thisLayer_xrGetInstanceProcAddr(XrInstance instance, const char* name, PFN_xrVoidFunction* function)
-{
-	return OpenXRLayer::GetLayerContext().GetInstanceProcAddr(instance, name, function);
-}
+
