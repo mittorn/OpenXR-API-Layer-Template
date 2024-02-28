@@ -3,8 +3,19 @@
 // SPDX-License-Identifier: MIT
 //
 
+#pragma once
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef __GNUC__
+#define likely(x)       __builtin_expect((x),1)
+#define unlikely(x)     __builtin_expect((x),0)
+#define noinline __attribute__ ((noinline))
+#else
+#define likely(x)   (x)
+#define unlikely(x) (x)
+#define noinline
+#endif // __GNUC__
 
 // simpliest vector and hashmap ever?
 template<class T>
@@ -32,7 +43,7 @@ struct GrowArray
 	GrowArray(const GrowArray &) = delete;
 	GrowArray &operator = (const GrowArray &) = delete;
 
-	void Grow(size_t size)
+	void noinline Grow(size_t size)
 	{
 		if(!size)
 			size = 32;
@@ -49,9 +60,9 @@ struct GrowArray
 	bool Add(const T& newVal)
 	{
 		size_t newIdx = count + 1;
-		if(newIdx > alloc)
+		if(unlikely(newIdx > alloc))
 			Grow(alloc * 2);
-		if(newIdx > alloc)
+		if(unlikely(newIdx > alloc))
 			return false;
 		mem[count] = newVal;
 		count = newIdx;
@@ -96,7 +107,7 @@ struct HashMap {
 			k(key), v(), n(NULL) {}
 	};
 
-	constexpr static size_t TblSize = 1 << TblPower;
+	constexpr static size_t TblSize = 1U << TblPower;
 	Node *table[TblSize] = {nullptr};
 
 	HashMap() {
@@ -119,17 +130,21 @@ struct HashMap {
 	size_t HashFunc(const Key &key) const
 	{
 		/// TODO: string hash?
-		return ((size_t) key)  & (TblSize - 1);
+		// handle hash: handle pointers usually aligned
+		return (((size_t) key) >> 8)  & (TblSize - 1);
 	}
 
 	// just in case: check existance or constant access
 	Value *GetPtr(const Key &key) const
 	{
-		unsigned long hashValue = HashFunc(key);
+		size_t hashValue = HashFunc(key);
 		Node *entry = table[hashValue];
 		while(entry)
+		{
 			if(entry->k == key)
 				return &entry->v;
+			entry = entry->n;
+		}
 		return nullptr;
 	}
 
@@ -149,24 +164,28 @@ struct HashMap {
 			entry = entry->n; \
 		}
 
+	Node * noinline _Allocate(Key key, size_t hashValue, Node *prev, Node *entry)
+	{
+		entry = new Node(key);
+		if(unlikely(!entry))
+		{
+			static Node error(key);
+			return &error;
+		}
+
+		if(prev == NULL)
+			table[hashValue] = entry;
+		else
+			prev->n = entry;
+		return entry;
+	}
+
 	Value& GetOrAllocate(const Key &key)
 	{
 		HASHFIND(key);
 
-		if(!entry)
-		{
-			entry = new Node(key);
-			if(!entry)
-			{
-				static Value error;
-				return error;
-			}
-
-			if(prev == NULL)
-				table[hashValue] = entry;
-			else
-				prev->n = entry;
-		}
+		if(unlikely(!entry))
+			entry = _Allocate(key,hashValue, prev, entry);
 
 		return entry->v;
 	}
@@ -186,4 +205,5 @@ struct HashMap {
 		delete entry;
 		return true;
 	}
+#undef HASHFIND
 };
