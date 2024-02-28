@@ -10,6 +10,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include "layer_utl.h"
 
 //Define next function pointer
 #define DECLARE_NEXT_FUNC(x) PFN_##x nextLayer_##x
@@ -17,63 +18,8 @@
 #define LOAD_NEXT_FUNC(x) nextLayer_xrGetInstanceProcAddr(mInstance, #x, (PFN_xrVoidFunction*)&nextLayer_##x)
 
 
-
-#include <unordered_map>
-#include <vector>
 struct Layer
 {
-#if 0
-#include "./HashMap.h"
-struct MyKeyHash {
-	unsigned long operator()(const void *key) const
-	{
-		return (uintptr_t)key % 10;
-	}
-};
-template<class Key, class T>
-using Map =  HashMap<Key, T, 10, MyKeyHash>;
-#else
-template<class Key, class T>
-using Map = std::unordered_map<Key, T>;
-
-#endif
-
-Map<XrAction, XrActionCreateInfo> gActionInfos;
-
-
-struct InputWrapper
-{
-	XrSession mSession;
-	std::vector<XrActionSet> mActionSets;
-};
-
-struct ActionSet
-{
-	XrActionSetCreateInfo info;
-	XrInstance instance;
-	std::vector<XrAction> mActions;
-};
-Map<XrActionSet, ActionSet> gActionSetInfos;
-
-Map<XrSession, InputWrapper*> gWrappers;
-InputWrapper *gLastWrapper;
-#if 0
-InputWrapper *GetWrapper(XrSession session)
-{
-	if(gLastWrapper && gLastWrapper->mSession == session)
-		return gLastWrapper;
-
-	InputWrapper * w = 0;
-	gWrappers.get(session,w);
-	if(!w)
-	{
-		w = new InputWrapper;
-		w->mSession = session;
-		gWrappers.put(session,w);
-	}
-	return w;
-}
-#endif
 	// maximum active instances loaded in class
 	// normally it should be 1, but reserve more in case some library checks OpenXR
 	constexpr static size_t max_instances = 4;
@@ -81,6 +27,7 @@ InputWrapper *GetWrapper(XrSession session)
 
 	// Only handle this XrInatance in this object
 	XrInstance mInstance = XR_NULL_HANDLE;
+	XrSession mActiveSession = XR_NULL_HANDLE;
 
 	// Extensions list
 	const char **mExtensions;
@@ -101,7 +48,10 @@ InputWrapper *GetWrapper(XrSession session)
 	NEXT_FUNC(f, xrAttachSessionActionSets); \
 	NEXT_FUNC(f, xrStringToPath); \
 	NEXT_FUNC(f, xrGetCurrentInteractionProfile); \
-	NEXT_FUNC(f, xrPollEvent)
+	NEXT_FUNC(f, xrPollEvent); \
+	NEXT_FUNC(f, xrCreateSession); \
+	NEXT_FUNC(f, xrDestroySession); \
+	NEXT_FUNC(f, xrDestroyAction)
 
 	NEXT_FUNC_LIST(DECLARE_NEXT_FUNC);
 
@@ -110,6 +60,68 @@ InputWrapper *GetWrapper(XrSession session)
 	{
 		for(int i = 0; i < max_instances; i++) if(mInstances[i].mInstance == inst) return i;
 		return -1;
+	}
+
+#define INSTANCE_FALLBACK(call) \
+	if( instance != mInstance ) \
+	{ \
+		int i = FindInstance(instance);\
+		if(i >= 0) \
+			return mInstances[i].call; \
+		return XR_ERROR_HANDLE_INVALID; \
+	}
+
+	HashMap<XrAction, XrActionCreateInfo> gActionInfos;
+
+	struct SessionState
+	{
+		XrSession mSession = XR_NULL_HANDLE;
+		XrSessionCreateInfo info = {  XR_TYPE_UNKNOWN };
+		XrActionSet *mActionSets = nullptr;
+		size_t mActionSetsCount = 0;
+	};
+
+	SessionState &GetSession(XrSession s)
+	{
+		if(mActiveSession == s && mpActiveSession)
+			return *mpActiveSession;
+
+		SessionState &w = mSessions[s];
+		w.mSession = s;
+		return w;
+	}
+
+	struct ActionSet
+	{
+		XrActionSetCreateInfo info = {  XR_TYPE_UNKNOWN };
+		XrInstance instance = XR_NULL_HANDLE;
+		GrowArray<XrAction> mActions;
+	};
+	HashMap<XrActionSet, ActionSet> gActionSetInfos;
+
+	HashMap<XrSession, SessionState> mSessions;
+	SessionState *mpActiveSession;
+
+	XrResult thisLayer_xrCreateSession(XrInstance instance, const XrSessionCreateInfo *createInfo, XrSession *session)
+	{
+		INSTANCE_FALLBACK(thisLayer_xrCreateSession(instance, createInfo, session));
+		XrResult res = nextLayer_xrCreateSession(instance, createInfo, session);
+		if(res == XR_SUCCESS)
+		{
+			SessionState &w = GetSession(*session);
+			w.info = *createInfo;
+		}
+		return res;
+	}
+	XrResult thisLayer_xrDestroySession(XrSession session)
+	{
+		if(mActiveSession == session)
+		{
+			mActiveSession = XR_NULL_HANDLE;
+			mpActiveSession = nullptr;
+		}
+		mSessions.Remove(session);
+		return nextLayer_xrDestroySession(session);
 	}
 
 	// Connect this layer to new XrInstance
@@ -145,18 +157,26 @@ InputWrapper *GetWrapper(XrSession session)
 		{
 			*action = act;
 			gActionInfos[act] = *info;
-			gActionSetInfos[actionSet].mActions.push_back(act);
+			if(!gActionSetInfos[actionSet].mActions.Add(act))
+			{
+				nextLayer_xrDestroyAction(act);
+				return XR_ERROR_OUT_OF_MEMORY;
+			}
 		}
 		return r;
 	}
 	XrResult thisLayer_xrCreateActionSet (XrInstance instance, const XrActionSetCreateInfo *info, XrActionSet *actionSet)
 	{
+		INSTANCE_FALLBACK(thisLayer_xrCreateActionSet(instance, info, actionSet));
 		XrActionSet acts;
 		XrResult r = nextLayer_xrCreateActionSet(instance, info, &acts);
 		if(r == XR_SUCCESS)
 		{
 			*actionSet = acts;
-			gActionSetInfos[acts] = ActionSet{*info, instance};
+
+			ActionSet &as = gActionSetInfos[acts];
+			as.info = *info;
+			as.instance = instance;
 		}
 		return r;
 	}
@@ -165,8 +185,9 @@ InputWrapper *GetWrapper(XrSession session)
 	{
 		ActionSet &seti = gActionSetInfos[s];
 		printf("Attached action set: %s %s\n", seti.info.actionSetName, seti.info.localizedActionSetName );
-		for(XrAction a: seti.mActions)
+		for(int i = 0; i < seti.mActions.count; i++ )
 		{
+			XrAction a = seti.mActions[i];
 			XrActionCreateInfo &cinfo = gActionInfos[a];
 			printf("info %p: %s %s\n", (void*)a, cinfo.actionName, cinfo.localizedActionName);
 			XrBoundSourcesForActionEnumerateInfo einfo = {XR_TYPE_BOUND_SOURCES_FOR_ACTION_ENUMERATE_INFO};
@@ -202,43 +223,46 @@ InputWrapper *GetWrapper(XrSession session)
 		XrResult r = nextLayer_xrAttachSessionActionSets(session, info);
 		if(r == XR_SUCCESS)
 		{
-			InputWrapper *& w = gWrappers[session];
-			if(!w)
-			{
-				w = new InputWrapper;
-				w->mSession = session;
-				for(int i = 0; i < info->countActionSets; i++)
-				{
-					XrActionSet s = info->actionSets[i];
-					w->mActionSets.push_back(info->actionSets[i]);
-					DumpActionSet(session,s);
-				}
+			SessionState &w = GetSession(session);
+			delete[] w.mActionSets;
+			w.mActionSets = new XrActionSet[info->countActionSets];
 
+			for(int i = 0; i < info->countActionSets; i++)
+			{
+				XrActionSet s = info->actionSets[i];
+				w.mActionSets[i] = s;
+				DumpActionSet(session,s);
 			}
 
 		}
 		return r;
 	}
 
-
 	XrResult thisLayer_xrPollEvent(
 		XrInstance instance, XrEventDataBuffer* eventData)
 	{
+		INSTANCE_FALLBACK(thisLayer_xrPollEvent(instance, eventData));
 		XrResult res = nextLayer_xrPollEvent(instance, eventData);
 
 		if(res == XR_SUCCESS)
 		{
-			static XrSession lastSession;
 			if(eventData->type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED)
 			{
 				XrEventDataSessionStateChanged *eSession = (XrEventDataSessionStateChanged*) eventData;
-				if(eSession->state >= XR_SESSION_STATE_IDLE && eSession->state <= XR_SESSION_STATE_FOCUSED)
-					lastSession = eSession->session;
+				if(eSession->state >= XR_SESSION_STATE_IDLE && eSession->state <= XR_SESSION_STATE_FOCUSED && mActiveSession != eSession->session )
+				{
+					mActiveSession = eSession->session;
+					SessionState *w = &mSessions[mActiveSession];
+					mpActiveSession = w;
+//					for(int i = 0; i < w->mActionSetsCount; i++)
+//						DumpActionSet(mActiveSession, w->mActionSets[i]);
+
+				}
 			}
 
-			if(eventData->type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED && lastSession)
+			if(eventData->type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED && mActiveSession)
 			{
-				InputWrapper *w = gWrappers[lastSession];
+				SessionState *w = mpActiveSession;
 				const char * const userPaths[] = {
 					"/user/hand/left",
 					"/user/hand/right",
@@ -255,7 +279,7 @@ InputWrapper *GetWrapper(XrSession session)
 					XrPath path;
 					if(nextLayer_xrStringToPath(instance, userPaths[i], &path) != XR_SUCCESS)
 						continue;
-					if(nextLayer_xrGetCurrentInteractionProfile(lastSession, path, &state) != XR_SUCCESS)
+					if(nextLayer_xrGetCurrentInteractionProfile(mActiveSession, path, &state) != XR_SUCCESS)
 						continue;
 					if(state.interactionProfile == XR_NULL_PATH)
 						continue;
@@ -264,8 +288,8 @@ InputWrapper *GetWrapper(XrSession session)
 					nextLayer_xrPathToString(instance, state.interactionProfile, XR_MAX_PATH_LENGTH, &len, profileStr);
 					printf("New interaction profile for %s: %s\n", userPaths[i], profileStr );
 				}
-				for(XrActionSet s: w->mActionSets)
-					DumpActionSet(lastSession, s);
+				for(int i = 0; i < w->mActionSetsCount; i++)
+					DumpActionSet(mActiveSession, w->mActionSets[i]);
 			}
 		}
 
@@ -276,13 +300,7 @@ InputWrapper *GetWrapper(XrSession session)
 	//Hooking xrDestroyInstance is the best way to do that.
 	XrResult thisLayer_xrDestroyInstance(XrInstance instance)
 	{
-		if( instance != mInstance )
-		{
-			int i = FindInstance(instance);
-			if(i >= 0)
-				return mInstances[i].thisLayer_xrDestroyInstance(instance);
-			return XR_ERROR_HANDLE_INVALID;
-		}
+		INSTANCE_FALLBACK(thisLayer_xrDestroyInstance(instance));
 		mInstance = XR_NULL_HANDLE;
 		mExtensionsCount = 0;
 		delete[] mExtensions;
@@ -390,6 +408,8 @@ XrResult thisLayer_xrGetInstanceProcAddr(XrInstance instance, const char* name, 
 	WRAP_FUNC(xrCreateActionSet);
 	WRAP_FUNC(xrAttachSessionActionSets);
 	WRAP_FUNC(xrPollEvent);
+	WRAP_FUNC(xrDestroySession);
+	WRAP_FUNC(xrCreateSession);
 
 #if XR_THISLAYER_HAS_EXTENSIONS
 	if(Layer::mInstances[i].IsExtensionEnabled("XR_TEST_test_me"))
