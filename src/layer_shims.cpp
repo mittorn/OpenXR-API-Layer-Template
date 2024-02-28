@@ -10,6 +10,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 #include "layer_utl.h"
 
 //Define next function pointer
@@ -51,7 +52,9 @@ struct Layer
 	NEXT_FUNC(f, xrPollEvent); \
 	NEXT_FUNC(f, xrCreateSession); \
 	NEXT_FUNC(f, xrDestroySession); \
-	NEXT_FUNC(f, xrDestroyAction)
+	NEXT_FUNC(f, xrDestroyAction); \
+	NEXT_FUNC(f, xrGetActionStateBoolean); \
+	NEXT_FUNC(f, xrGetActionStateFloat);
 
 	NEXT_FUNC_LIST(DECLARE_NEXT_FUNC);
 
@@ -70,13 +73,19 @@ struct Layer
 			return mInstances[i].call; \
 		return XR_ERROR_HANDLE_INVALID; \
 	}
+	struct Action
+	{
+		XrActionCreateInfo info = { XR_TYPE_UNKNOWN };
+		bool ignoreDefault = false;
+		bool trigger = false;
+	};
 
-	HashMap<XrAction, XrActionCreateInfo> gActionInfos;
+	HashMap<XrAction, Action> gActionInfos;
 
 	struct SessionState
 	{
 		XrSession mSession = XR_NULL_HANDLE;
-		XrSessionCreateInfo info = {  XR_TYPE_UNKNOWN };
+		XrSessionCreateInfo info = { XR_TYPE_UNKNOWN };
 		XrActionSet *mActionSets = nullptr;
 		size_t mActionSetsCount = 0;
 		~SessionState()
@@ -99,7 +108,7 @@ struct Layer
 
 	struct ActionSet
 	{
-		XrActionSetCreateInfo info = {  XR_TYPE_UNKNOWN };
+		XrActionSetCreateInfo info = { XR_TYPE_UNKNOWN };
 		XrInstance instance = XR_NULL_HANDLE;
 		GrowArray<XrAction> mActions;
 	};
@@ -162,7 +171,9 @@ struct Layer
 		if(r == XR_SUCCESS)
 		{
 			*action = act;
-			gActionInfos[act] = *info;
+			// test: animate grab_object action
+			bool ignore = !strcmp(info->actionName, "grab_object");
+			gActionInfos[act] = {*info, ignore, false};
 			if(!gActionSetInfos[actionSet].mActions.Add(act))
 			{
 				nextLayer_xrDestroyAction(act);
@@ -187,6 +198,51 @@ struct Layer
 		return r;
 	}
 
+	XrResult thisLayer_xrGetActionStateBoolean(XrSession session, const XrActionStateGetInfo *getInfo, XrActionStateBoolean *state)
+	{
+		Action *a = gActionInfos.GetPtr(getInfo->action);
+		if(a)
+		{
+			XrResult r = XR_SUCCESS;
+			if(!a->ignoreDefault)
+				r = nextLayer_xrGetActionStateBoolean(session, getInfo, state);
+			else
+			{
+				static bool chg = false;
+				chg = !chg;
+				state->type = XR_TYPE_ACTION_STATE_BOOLEAN;
+				state->currentState = chg;
+				state->isActive = true;
+				state->changedSinceLastSync = true;
+				state->lastChangeTime = 0; // todo: xrSyncActions
+			}
+			return r;
+		}
+		return nextLayer_xrGetActionStateBoolean(session, getInfo, state);
+	}
+
+	XrResult thisLayer_xrGetActionStateFloat(XrSession session, const XrActionStateGetInfo *getInfo, XrActionStateFloat *state)
+	{
+		Action *a = gActionInfos.GetPtr(getInfo->action);
+		if(a)
+		{
+			XrResult r = XR_SUCCESS;
+			if(!a->ignoreDefault)
+				r = nextLayer_xrGetActionStateFloat(session, getInfo, state);
+			else
+			{
+				static float chg = 0;
+				chg = fmodf(chg + 0.01f,1.0f);
+				state->type = XR_TYPE_ACTION_STATE_FLOAT;
+				state->currentState = chg;
+				state->isActive = true;
+				state->changedSinceLastSync = true;
+				state->lastChangeTime = 0; // todo: xrSyncActions
+			}
+			return r;
+		}
+		return nextLayer_xrGetActionStateFloat(session, getInfo, state);
+	}
 	void DumpActionSet(XrSession session, XrActionSet s)
 	{
 		ActionSet &seti = gActionSetInfos[s];
@@ -194,7 +250,8 @@ struct Layer
 		for(int i = 0; i < seti.mActions.count; i++ )
 		{
 			XrAction a = seti.mActions[i];
-			XrActionCreateInfo &cinfo = gActionInfos[a];
+			Action &as = gActionInfos[a];
+			XrActionCreateInfo &cinfo = as.info;
 			printf("info %p: %s %s\n", (void*)a, cinfo.actionName, cinfo.localizedActionName);
 			XrBoundSourcesForActionEnumerateInfo einfo = {XR_TYPE_BOUND_SOURCES_FOR_ACTION_ENUMERATE_INFO};
 			einfo.action = a;
@@ -429,6 +486,8 @@ XrResult thisLayer_xrGetInstanceProcAddr(XrInstance instance, const char* name, 
 	WRAP_FUNC(xrPollEvent);
 	WRAP_FUNC(xrDestroySession);
 	WRAP_FUNC(xrCreateSession);
+	WRAP_FUNC(xrGetActionStateBoolean);
+	WRAP_FUNC(xrGetActionStateFloat);
 
 #if XR_THISLAYER_HAS_EXTENSIONS
 	if(Layer::mInstances[i].IsExtensionEnabled("XR_TEST_test_me"))
