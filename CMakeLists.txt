@@ -46,6 +46,7 @@ if(WIN32)
 	endif()
 else()
 	set(library_filename "../lib${library_name}.so")
+	set(CMAKE_SHARED_LINKER_FLAGS "-Wl,--no-undefined")
 endif(WIN32)
 
 configure_file(
