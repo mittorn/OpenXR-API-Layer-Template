@@ -105,6 +105,7 @@ XrResult thisLayer_xrCreateApiLayerInstance(const XrInstanceCreateInfo* info, co
 	CreateLayerInstance(newInstance, apiLayerInfo->nextInfo->nextGetInstanceProcAddr, enabled_this_layer_extensions, enabled_this_layer_extensions_count);
 
 	*instance = newInstance;
+	delete[] extension_list_without_implemented_extensions;
 	return result;
 }
 

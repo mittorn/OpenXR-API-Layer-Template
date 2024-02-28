@@ -79,6 +79,12 @@ struct Layer
 		XrSessionCreateInfo info = {  XR_TYPE_UNKNOWN };
 		XrActionSet *mActionSets = nullptr;
 		size_t mActionSetsCount = 0;
+		~SessionState()
+		{
+			delete[] mActionSets;
+			mActionSets = nullptr;
+			mActionSetsCount = 0;
+		}
 	};
 
 	SessionState &GetSession(XrSession s)
@@ -194,25 +200,29 @@ struct Layer
 			einfo.action = a;
 			uint32_t count;
 			nextLayer_xrEnumerateBoundSourcesForAction(session, &einfo, 0, &count, NULL);
-			XrPath paths[count];
-			nextLayer_xrEnumerateBoundSourcesForAction(session, &einfo, count, &count, paths);
-			for(int j = 0; j < count; j++)
+			if(count)
 			{
-				uint32_t slen;
-				XrInputSourceLocalizedNameGetInfo linfo = {XR_TYPE_INPUT_SOURCE_LOCALIZED_NAME_GET_INFO};
-				linfo.sourcePath = paths[j];
-				linfo.whichComponents = XR_INPUT_SOURCE_LOCALIZED_NAME_USER_PATH_BIT | XR_INPUT_SOURCE_LOCALIZED_NAME_INTERACTION_PROFILE_BIT | XR_INPUT_SOURCE_LOCALIZED_NAME_COMPONENT_BIT;
-				nextLayer_xrGetInputSourceLocalizedName(session, &linfo, 0, &slen, NULL);
+				/// TODO: non-VLA compilers fallback
+				XrPath paths[count];
+				nextLayer_xrEnumerateBoundSourcesForAction(session, &einfo, count, &count, paths);
+				for(int j = 0; j < count; j++)
 				{
-					char str[slen + 1];
-					nextLayer_xrGetInputSourceLocalizedName(session, &linfo, slen + 1, &slen, str);
-					printf("Description %s\n", str);
-				}
-				nextLayer_xrPathToString(seti.instance, paths[j], 0, &slen, NULL);
-				{
-					char str[slen + 1];
-					nextLayer_xrPathToString(seti.instance, paths[j], slen + 1, &slen, str);
-					printf("raw_path %s\n", str);
+					uint32_t slen;
+					XrInputSourceLocalizedNameGetInfo linfo = {XR_TYPE_INPUT_SOURCE_LOCALIZED_NAME_GET_INFO};
+					linfo.sourcePath = paths[j];
+					linfo.whichComponents = XR_INPUT_SOURCE_LOCALIZED_NAME_USER_PATH_BIT | XR_INPUT_SOURCE_LOCALIZED_NAME_INTERACTION_PROFILE_BIT | XR_INPUT_SOURCE_LOCALIZED_NAME_COMPONENT_BIT;
+					nextLayer_xrGetInputSourceLocalizedName(session, &linfo, 0, &slen, NULL);
+					{
+						char str[slen + 1];
+						nextLayer_xrGetInputSourceLocalizedName(session, &linfo, slen + 1, &slen, str);
+						printf("Description %s\n", str);
+					}
+					nextLayer_xrPathToString(seti.instance, paths[j], 0, &slen, NULL);
+					{
+						char str[slen + 1];
+						nextLayer_xrPathToString(seti.instance, paths[j], slen + 1, &slen, str);
+						printf("raw_path %s\n", str);
+					}
 				}
 			}
 		}
@@ -306,6 +316,15 @@ struct Layer
 		delete[] mExtensions;
 		mExtensions = nullptr;
 		return nextLayer_xrDestroyInstance(instance);
+	}
+
+	~Layer()
+	{
+		// prevent leak if someone forgot to call xrDestroyInstance
+		mInstance = XR_NULL_HANDLE;
+		mExtensionsCount = 0;
+		delete[] mExtensions;
+		mExtensions = nullptr;
 	}
 
 #if XR_THISLAYER_HAS_EXTENSIONS
