@@ -106,6 +106,15 @@ struct Layer
 		return nextLayer_xrDestroyInstance(instance);
 	}
 
+	~Layer()
+	{
+		// prevent leak if someone forgot to call xrDestroyInstance
+		mInstance = XR_NULL_HANDLE;
+		mExtensionsCount = 0;
+		delete[] mExtensions;
+		mExtensions = nullptr;
+	}
+
 #if XR_THISLAYER_HAS_EXTENSIONS
 	//The following function doesn't exist in the spec, this is just a test for the extension mecanism
 	XrResult thisLayer_xrTestMeTEST(XrSession session)
