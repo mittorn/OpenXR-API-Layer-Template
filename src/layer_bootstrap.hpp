@@ -23,7 +23,8 @@
 
 #include "openxr/openxr_platform_defines.h"
 #include "openxr/openxr.h"
-#include "api_layer_interface.hpp"
+//#include "api_layer_interface.hpp"
+#include "loader_interfaces.h"
 
 #ifndef LAYER_EXPORT
 #if defined(__GNUC__) && __GNUC__ >= 4
