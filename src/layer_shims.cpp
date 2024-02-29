@@ -34,6 +34,26 @@ struct Layer
 	const char **mExtensions;
 	uint32_t mExtensionsCount;
 
+	enum eUserPaths{
+		USER_HAND_LEFT = 0,
+		USER_HAND_RIGHT,
+		USER_HEAD,
+		USER_GAMEPAD,
+		USER_INVALID,
+		USER_PATH_COUNT
+	};
+
+	static constexpr const char *const mszUserPaths[] =
+	{
+		"/user/hand/left",
+		"/user/hand/right",
+		"/user/head",
+		"/user/gamepad",
+		//"/user/treadmill"
+	};
+
+	XrPath mUserPaths[USER_PATH_COUNT];
+
 	// Always need this for instance creation/destroy
 	DECLARE_NEXT_FUNC(xrGetInstanceProcAddr);
 	DECLARE_NEXT_FUNC(xrDestroyInstance);
@@ -66,21 +86,27 @@ struct Layer
 	}
 
 #define INSTANCE_FALLBACK(call) \
-	if( instance != mInstance ) \
+	if( unlikely(instance != mInstance) ) \
 	{ \
 		int i = FindInstance(instance);\
 		if(i >= 0) \
 			return mInstances[i].call; \
 		return XR_ERROR_HANDLE_INVALID; \
 	}
-	struct Action
+
+	struct ActionState
 	{
-		XrActionCreateInfo info = { XR_TYPE_UNKNOWN };
 		bool ignoreDefault = false;
 		bool trigger = false;
 	};
 
-	HashMap<XrAction, Action> gActionInfos;
+	struct Action
+	{
+		XrActionCreateInfo info = { XR_TYPE_UNKNOWN };
+		ActionState state[USER_PATH_COUNT];
+	};
+
+	HashArrayMap<XrAction, Action> gActionInfos;
 
 	struct SessionState
 	{
@@ -117,7 +143,7 @@ struct Layer
 	HashMap<XrSession, SessionState> mSessions;
 	SessionState *mpActiveSession;
 
-	XrResult thisLayer_xrCreateSession(XrInstance instance, const XrSessionCreateInfo *createInfo, XrSession *session)
+	XrResult noinline thisLayer_xrCreateSession(XrInstance instance, const XrSessionCreateInfo *createInfo, XrSession *session)
 	{
 		INSTANCE_FALLBACK(thisLayer_xrCreateSession(instance, createInfo, session));
 		XrResult res = nextLayer_xrCreateSession(instance, createInfo, session);
@@ -128,7 +154,7 @@ struct Layer
 		}
 		return res;
 	}
-	XrResult thisLayer_xrDestroySession(XrSession session)
+	XrResult noinline thisLayer_xrDestroySession(XrSession session)
 	{
 		if(mActiveSession == session)
 		{
@@ -154,6 +180,8 @@ struct Layer
 		delete[] mExtensions;
 		mExtensions = exts;
 		mExtensionsCount = extcount;
+		for(int i = 0; i < USER_INVALID; i++)
+			nextLayer_xrStringToPath(inst, mszUserPaths[i], &mUserPaths[i]);
 	}
 
 	// Only need this if extensions used
@@ -164,7 +192,7 @@ struct Layer
 				return true;
 		return false;
 	}
-	XrResult thisLayer_xrCreateAction (XrActionSet actionSet, const XrActionCreateInfo *info, XrAction *action)
+	XrResult noinline thisLayer_xrCreateAction (XrActionSet actionSet, const XrActionCreateInfo *info, XrAction *action)
 	{
 		XrAction act;
 		XrResult r = nextLayer_xrCreateAction(actionSet, info, &act);
@@ -173,7 +201,7 @@ struct Layer
 			*action = act;
 			// test: animate grab_object action
 			bool ignore = !strcmp(info->actionName, "grab_object");
-			gActionInfos[act] = {*info, ignore, false};
+			gActionInfos[act] = {*info, {{false, false}, {ignore, false}}};
 			if(!gActionSetInfos[actionSet].mActions.Add(act))
 			{
 				nextLayer_xrDestroyAction(act);
@@ -182,7 +210,7 @@ struct Layer
 		}
 		return r;
 	}
-	XrResult thisLayer_xrCreateActionSet (XrInstance instance, const XrActionSetCreateInfo *info, XrActionSet *actionSet)
+	XrResult noinline thisLayer_xrCreateActionSet (XrInstance instance, const XrActionSetCreateInfo *info, XrActionSet *actionSet)
 	{
 		INSTANCE_FALLBACK(thisLayer_xrCreateActionSet(instance, info, actionSet));
 		XrActionSet acts;
@@ -197,14 +225,35 @@ struct Layer
 		}
 		return r;
 	}
+	static size_t _FindPath2(XrPath *path, size_t max, XrPath p)
+	{
+		size_t i = 0;
+		while(path[i] != p) i++;
+		return i;
+	}
+
+	// gcc doing strange jumpy unroll here, so split branchless hands from others
+	forceinline size_t FindPath(XrPath p)
+	{
+		size_t i = 0;
+		int notright = p != mUserPaths[USER_HAND_RIGHT];
+		int notleft = p != mUserPaths[USER_HAND_LEFT];
+
+		// fast branchess path
+		i = !notright + (notleft & notright) * USER_HEAD;
+		if(unlikely(i == USER_HEAD))
+			return _FindPath2(&mUserPaths[USER_HEAD], USER_PATH_COUNT - USER_HEAD, p);
+		return i;
+	}
 
 	XrResult thisLayer_xrGetActionStateBoolean(XrSession session, const XrActionStateGetInfo *getInfo, XrActionStateBoolean *state)
 	{
 		Action *a = gActionInfos.GetPtr(getInfo->action);
-		if(a)
+		if(likely(a))
 		{
 			XrResult r = XR_SUCCESS;
-			if(!a->ignoreDefault)
+			ActionState &hand = a->state[FindPath(getInfo->subactionPath)];
+			if(!hand.ignoreDefault)
 				r = nextLayer_xrGetActionStateBoolean(session, getInfo, state);
 			else
 			{
@@ -224,10 +273,11 @@ struct Layer
 	XrResult thisLayer_xrGetActionStateFloat(XrSession session, const XrActionStateGetInfo *getInfo, XrActionStateFloat *state)
 	{
 		Action *a = gActionInfos.GetPtr(getInfo->action);
-		if(a)
+		if(likely(a))
 		{
 			XrResult r = XR_SUCCESS;
-			if(!a->ignoreDefault)
+			ActionState &hand = a->state[FindPath(getInfo->subactionPath)];
+			if(!hand.ignoreDefault)
 				r = nextLayer_xrGetActionStateFloat(session, getInfo, state);
 			else
 			{
@@ -285,7 +335,7 @@ struct Layer
 		}
 	}
 
-	XrResult thisLayer_xrAttachSessionActionSets (XrSession session, const XrSessionActionSetsAttachInfo *info)
+	XrResult noinline thisLayer_xrAttachSessionActionSets (XrSession session, const XrSessionActionSetsAttachInfo *info)
 	{
 		XrResult r = nextLayer_xrAttachSessionActionSets(session, info);
 		if(r == XR_SUCCESS)
@@ -305,55 +355,45 @@ struct Layer
 		return r;
 	}
 
-	XrResult thisLayer_xrPollEvent(
+	forceinline XrResult thisLayer_xrPollEvent(
 		XrInstance instance, XrEventDataBuffer* eventData)
 	{
-		INSTANCE_FALLBACK(thisLayer_xrPollEvent(instance, eventData));
+		//INSTANCE_FALLBACK(thisLayer_xrPollEvent(instance, eventData));
 		XrResult res = nextLayer_xrPollEvent(instance, eventData);
 
-		if(res == XR_SUCCESS)
+		// most times it should be XR_EVENT_UNAVAILABLE
+		if(unlikely(instance == mInstance && res == XR_SUCCESS))
 		{
-			if(eventData->type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED)
+			if(likely(eventData->type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED))
 			{
 				XrEventDataSessionStateChanged *eSession = (XrEventDataSessionStateChanged*) eventData;
-				if(eSession->state >= XR_SESSION_STATE_IDLE && eSession->state <= XR_SESSION_STATE_FOCUSED && mActiveSession != eSession->session )
+				if(unlikely(eSession->state >= XR_SESSION_STATE_IDLE && eSession->state <= XR_SESSION_STATE_FOCUSED && mActiveSession != eSession->session))
 				{
 					mActiveSession = eSession->session;
-					SessionState *w = &mSessions[mActiveSession];
-					mpActiveSession = w;
+					mpActiveSession = mSessions.GetPtr(mActiveSession);
 //					for(int i = 0; i < w->mActionSetsCount; i++)
 //						DumpActionSet(mActiveSession, w->mActionSets[i]);
 
 				}
 			}
 
-			if(eventData->type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED && mActiveSession)
+			if(unlikely(eventData->type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) && mpActiveSession)
 			{
 				SessionState *w = mpActiveSession;
-				const char * const userPaths[] = {
-					"/user/hand/left",
-					"/user/hand/right",
-					"/user/head",
-					"/user/gamepad",
-					//				"/user/treadmill"
-				};
 				if(!w)
 					return res;
 
 				XrInteractionProfileState state = {XR_TYPE_INTERACTION_PROFILE_STATE};
-				for(int i = 0; i < sizeof(userPaths)/sizeof(userPaths[0]); i++)
+				for(int i = 0; i < USER_INVALID; i++)
 				{
-					XrPath path;
-					if(nextLayer_xrStringToPath(instance, userPaths[i], &path) != XR_SUCCESS)
-						continue;
-					if(nextLayer_xrGetCurrentInteractionProfile(mActiveSession, path, &state) != XR_SUCCESS)
+					if(nextLayer_xrGetCurrentInteractionProfile(mActiveSession, mUserPaths[i], &state) != XR_SUCCESS)
 						continue;
 					if(state.interactionProfile == XR_NULL_PATH)
 						continue;
 					char profileStr[XR_MAX_PATH_LENGTH];
 					uint32_t len;
 					nextLayer_xrPathToString(instance, state.interactionProfile, XR_MAX_PATH_LENGTH, &len, profileStr);
-					printf("New interaction profile for %s: %s\n", userPaths[i], profileStr );
+					printf("New interaction profile for %s: %s\n", mszUserPaths[i], profileStr );
 				}
 				for(int i = 0; i < w->mActionSetsCount; i++)
 					DumpActionSet(mActiveSession, w->mActionSets[i]);
@@ -365,7 +405,7 @@ struct Layer
 
 	//IMPORTANT: to allow for multiple instance creation/destruction, the contect of the layer must be re-initialized when the instance is being destroyed.
 	//Hooking xrDestroyInstance is the best way to do that.
-	XrResult thisLayer_xrDestroyInstance(XrInstance instance)
+	XrResult noinline thisLayer_xrDestroyInstance(XrInstance instance)
 	{
 		INSTANCE_FALLBACK(thisLayer_xrDestroyInstance(instance));
 		mInstance = XR_NULL_HANDLE;
@@ -420,7 +460,7 @@ struct FunctionPointerGenerator
 	{
 		if(i == instance_index)
 			return (&InstanceThunk<T,instance_index, Result,Args...>::template Call<pfn>);
-		if constexpr(instance_index < T::max_instances)
+		if constexpr(instance_index < T::max_instances - 1)
 				return getFunc<pfn, instance_index + 1>(i);
 		return nullptr;
 	}

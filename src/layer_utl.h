@@ -8,13 +8,15 @@
 #include <string.h>
 
 #ifdef __GNUC__
-#define likely(x)       __builtin_expect((x),1)
-#define unlikely(x)     __builtin_expect((x),0)
+#define likely(x)       __builtin_expect(!!(x),1)
+#define unlikely(x)     __builtin_expect(!!(x),0)
 #define noinline __attribute__ ((noinline))
+#define forceinline __attribute__ ((always_inline))
 #else
 #define likely(x)   (x)
 #define unlikely(x) (x)
 #define noinline
+#define forceinline
 #endif // __GNUC__
 
 // simpliest vector and hashmap ever?
@@ -81,7 +83,7 @@ struct GrowArray
 		}
 		return false;
 	}
-	T& operator[](size_t i)
+	T& operator[](size_t i) const
 	{
 		return mem[i];
 	}
@@ -135,11 +137,11 @@ struct HashMap {
 	}
 
 	// just in case: check existance or constant access
-	Value *GetPtr(const Key &key) const
+	forceinline Value *GetPtr(const Key &key) const
 	{
 		size_t hashValue = HashFunc(key);
 		Node *entry = table[hashValue];
-		while(entry)
+		while(likely(entry))
 		{
 			if(entry->k == key)
 				return &entry->v;
@@ -204,6 +206,84 @@ struct HashMap {
 
 		delete entry;
 		return true;
+	}
+#undef HASHFIND
+};
+
+
+template <typename Key, typename Value, size_t TblPower = 2>
+struct HashArrayMap {
+
+	struct Node
+	{
+		Key k;
+		Value v;
+
+		Node(const Key &key, const Value &value) :
+			k(key), v(value){}
+		Node(const Key &key) :
+			k(key), v(){}
+	};
+
+	constexpr static size_t TblSize = 1U << TblPower;
+	GrowArray<Node> table[TblSize];
+
+	HashArrayMap() {
+	}
+
+	~HashArrayMap() {
+	}
+
+	size_t HashFunc(const Key &key) const
+	{
+		/// TODO: string hash?
+		// handle hash: handle pointers usually aligned
+		return (((size_t) key) >> 8)  & (TblSize - 1);
+	}
+
+	// just in case: check existance or constant access
+	Value *GetPtr(const Key &key) const
+	{
+		size_t hashValue = HashFunc(key);
+		const GrowArray<Node> &entry = table[hashValue];
+		for(int i = 0; i < entry.count; i++)
+		{
+			if(entry[i].k == key)
+				return &entry[i].v;
+		}
+		return nullptr;
+	}
+
+	Value &operator [] (const Key &key)
+	{
+		return GetOrAllocate(key);
+	}
+
+#define HASHFIND(key) \
+	GrowArray<Node> &entry = table[HashFunc(key)]; \
+	int i; \
+	for(i = 0; i < entry.count; i++) \
+		if( entry[i].k == key ) \
+			break;
+
+	Value& GetOrAllocate(const Key &key)
+	{
+		HASHFIND(key);
+		if(i == entry.count )
+			entry.Add(Node(key));
+
+		return entry[i].v;
+	}
+
+	bool Remove(const Key &key)
+	{
+		HASHFIND(key);
+		if(i != entry.count)
+		{
+			entry.RemoveAt(i);
+			return true;
+		}
+		return false;
 	}
 #undef HASHFIND
 };
