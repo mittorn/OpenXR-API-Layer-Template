@@ -74,7 +74,9 @@ struct Layer
 	NEXT_FUNC(f, xrDestroySession); \
 	NEXT_FUNC(f, xrDestroyAction); \
 	NEXT_FUNC(f, xrGetActionStateBoolean); \
-	NEXT_FUNC(f, xrGetActionStateFloat);
+	NEXT_FUNC(f, xrGetActionStateFloat); \
+	NEXT_FUNC(f, xrSyncActions); \
+	NEXT_FUNC(f, xrWaitFrame);
 
 	NEXT_FUNC_LIST(DECLARE_NEXT_FUNC);
 
@@ -103,10 +105,22 @@ struct Layer
 	struct Action
 	{
 		XrActionCreateInfo info = { XR_TYPE_UNKNOWN };
-		ActionState state[USER_PATH_COUNT];
+		XrAction action;
+		ActionState baseState[USER_PATH_COUNT];
 	};
 
-	HashArrayMap<XrAction, Action> gActionInfos;
+	struct ActionFloat : Action
+	{
+		XrActionStateFloat floatState[USER_PATH_COUNT];
+	};
+
+	struct ActionBoolean : Action
+	{
+		XrActionStateBoolean boolState[USER_PATH_COUNT];
+	};
+
+
+	//HashMap<XrAction, Action> mActionsOther;
 
 	struct SessionState
 	{
@@ -114,6 +128,8 @@ struct Layer
 		XrSessionCreateInfo info = { XR_TYPE_UNKNOWN };
 		XrActionSet *mActionSets = nullptr;
 		size_t mActionSetsCount = 0;
+		HashArrayMap<XrAction, ActionBoolean> mActionsBoolean;
+		HashArrayMap<XrAction, ActionFloat> mActionsFloat;
 		~SessionState()
 		{
 			delete[] mActionSets;
@@ -136,12 +152,14 @@ struct Layer
 	{
 		XrActionSetCreateInfo info = { XR_TYPE_UNKNOWN };
 		XrInstance instance = XR_NULL_HANDLE;
-		GrowArray<XrAction> mActions;
+		GrowArray<Action> mActions;
 	};
 	HashMap<XrActionSet, ActionSet> gActionSetInfos;
 
 	HashMap<XrSession, SessionState> mSessions;
 	SessionState *mpActiveSession;
+	// must be session-private, but always need most recent
+	XrTime mPredictedTime;
 
 	XrResult noinline thisLayer_xrCreateSession(XrInstance instance, const XrSessionCreateInfo *createInfo, XrSession *session)
 	{
@@ -199,10 +217,10 @@ struct Layer
 		if(r == XR_SUCCESS)
 		{
 			*action = act;
+
 			// test: animate grab_object action
 			bool ignore = !strcmp(info->actionName, "grab_object");
-			gActionInfos[act] = {*info, {{false, false}, {ignore, false}}};
-			if(!gActionSetInfos[actionSet].mActions.Add(act))
+			if(!gActionSetInfos[actionSet].mActions.Add({*info, act, {{false, false}, {ignore, false}}}))
 			{
 				nextLayer_xrDestroyAction(act);
 				return XR_ERROR_OUT_OF_MEMORY;
@@ -248,50 +266,98 @@ struct Layer
 
 	XrResult thisLayer_xrGetActionStateBoolean(XrSession session, const XrActionStateGetInfo *getInfo, XrActionStateBoolean *state)
 	{
-		Action *a = gActionInfos.GetPtr(getInfo->action);
-		if(likely(a))
+		if(likely(mpActiveSession && mActiveSession == session))
 		{
-			XrResult r = XR_SUCCESS;
-			ActionState &hand = a->state[FindPath(getInfo->subactionPath)];
-			if(!hand.ignoreDefault)
-				r = nextLayer_xrGetActionStateBoolean(session, getInfo, state);
-			else
+			ActionBoolean *a = mpActiveSession->mActionsBoolean.GetPtr(getInfo->action);
+			if(likely(a))
 			{
-				static bool chg = false;
-				chg = !chg;
-				state->type = XR_TYPE_ACTION_STATE_BOOLEAN;
-				state->currentState = chg;
-				state->isActive = true;
-				state->changedSinceLastSync = true;
-				state->lastChangeTime = 0; // todo: xrSyncActions
+				XrResult r = XR_SUCCESS;
+				int handPath = FindPath(getInfo->subactionPath);
+				ActionState &hand = a->baseState[handPath];
+				if(!hand.ignoreDefault)
+					r = nextLayer_xrGetActionStateBoolean(session, getInfo, state);
+				else
+					*state = a->boolState[handPath];
+				return r;
 			}
-			return r;
 		}
 		return nextLayer_xrGetActionStateBoolean(session, getInfo, state);
 	}
 
 	XrResult thisLayer_xrGetActionStateFloat(XrSession session, const XrActionStateGetInfo *getInfo, XrActionStateFloat *state)
 	{
-		Action *a = gActionInfos.GetPtr(getInfo->action);
-		if(likely(a))
+		if(likely(mpActiveSession && mActiveSession == session))
 		{
-			XrResult r = XR_SUCCESS;
-			ActionState &hand = a->state[FindPath(getInfo->subactionPath)];
-			if(!hand.ignoreDefault)
-				r = nextLayer_xrGetActionStateFloat(session, getInfo, state);
-			else
+			ActionFloat *a = mpActiveSession->mActionsFloat.GetPtr(getInfo->action);
+			if(likely(a))
 			{
-				static float chg = 0;
-				chg = fmodf(chg + 0.01f,1.0f);
-				state->type = XR_TYPE_ACTION_STATE_FLOAT;
-				state->currentState = chg;
-				state->isActive = true;
-				state->changedSinceLastSync = true;
-				state->lastChangeTime = 0; // todo: xrSyncActions
+				XrResult r = XR_SUCCESS;
+				int handPath = FindPath(getInfo->subactionPath);
+				ActionState &hand = a->baseState[handPath];
+				if(!hand.ignoreDefault)
+					r = nextLayer_xrGetActionStateFloat(session, getInfo, state);
+				else
+					*state = a->floatState[handPath];
+				return r;
 			}
-			return r;
 		}
 		return nextLayer_xrGetActionStateFloat(session, getInfo, state);
+	}
+	XrResult thisLayer_xrWaitFrame(XrSession session, const XrFrameWaitInfo *frameWaitInfo, XrFrameState *frameState)
+	{
+
+		XrResult res = nextLayer_xrWaitFrame(session, frameWaitInfo, frameState);
+		mPredictedTime = frameState->predictedDisplayTime;
+		return res;
+	}
+
+	forceinline XrResult thisLayer_xrSyncActions(XrSession session, const XrActionsSyncInfo *syncInfo)
+	{
+		XrResult ret = nextLayer_xrSyncActions(session, syncInfo);
+		if(likely(mpActiveSession && mActiveSession == session))
+		{
+			for(int i = 0; i < mpActiveSession->mActionsBoolean.TblSize; i++)
+			{
+				for(int j = 0; j < mpActiveSession->mActionsBoolean.table[i].count;j++)
+				{
+					ActionBoolean &a = mpActiveSession->mActionsBoolean.table[i][j].v;
+					for(int handPath = 0; handPath < USER_PATH_COUNT; handPath++)
+					{
+						ActionState &hand = a.baseState[handPath];
+						if(hand.ignoreDefault)
+						{
+							XrActionStateBoolean &state = a.boolState[handPath];
+							static bool chg = false;
+							chg = !chg;
+							state.currentState  = chg;
+							state.changedSinceLastSync = true;
+							state.lastChangeTime = mPredictedTime;
+						}
+					}
+				}
+			}
+			for(int i = 0; i < mpActiveSession->mActionsFloat.TblSize; i++)
+			{
+				for(int j = 0; j < mpActiveSession->mActionsFloat.table[i].count;j++)
+				{
+					ActionFloat &a = mpActiveSession->mActionsFloat.table[i][j].v;
+					for(int handPath = 0; handPath < USER_PATH_COUNT; handPath++)
+					{
+						ActionState &hand = a.baseState[handPath];
+						if(hand.ignoreDefault)
+						{
+							XrActionStateFloat &state = a.floatState[handPath];
+							static float chg = 0;
+							chg = fmodf(chg + 0.01f,1.0f);
+							state.currentState  = chg;
+							state.changedSinceLastSync = true;
+							state.lastChangeTime = mPredictedTime;
+						}
+					}
+				}
+			}
+		}
+		return ret;
 	}
 	void DumpActionSet(XrSession session, XrActionSet s)
 	{
@@ -299,12 +365,11 @@ struct Layer
 		printf("Attached action set: %s %s\n", seti.info.actionSetName, seti.info.localizedActionSetName );
 		for(int i = 0; i < seti.mActions.count; i++ )
 		{
-			XrAction a = seti.mActions[i];
-			Action &as = gActionInfos[a];
+			Action &as = seti.mActions[i];
 			XrActionCreateInfo &cinfo = as.info;
-			printf("info %p: %s %s\n", (void*)a, cinfo.actionName, cinfo.localizedActionName);
+			printf("info %p: %s %s\n", (void*)as.action, cinfo.actionName, cinfo.localizedActionName);
 			XrBoundSourcesForActionEnumerateInfo einfo = {XR_TYPE_BOUND_SOURCES_FOR_ACTION_ENUMERATE_INFO};
-			einfo.action = a;
+			einfo.action = as.action;
 			uint32_t count;
 			nextLayer_xrEnumerateBoundSourcesForAction(session, &einfo, 0, &count, NULL);
 			if(count)
@@ -343,12 +408,45 @@ struct Layer
 			SessionState &w = GetSession(session);
 			delete[] w.mActionSets;
 			w.mActionSets = new XrActionSet[info->countActionSets];
+			w.mActionSetsCount = info->countActionSets;
 
 			for(int i = 0; i < info->countActionSets; i++)
 			{
 				XrActionSet s = info->actionSets[i];
 				w.mActionSets[i] = s;
 				DumpActionSet(session,s);
+				ActionSet &set = gActionSetInfos[s];
+				for(int j = 0; j < set.mActions.count; j++)
+				{
+					Action &a = set.mActions[j];
+					switch(a.info.actionType)
+					{
+						case XR_ACTION_TYPE_BOOLEAN_INPUT:
+						{
+							ActionBoolean &ab = w.mActionsBoolean[a.action];
+							*(Action*)&ab = a;
+							for(int i = 0; i < USER_PATH_COUNT; i++)
+							{
+								ab.boolState[i].type = XR_TYPE_ACTION_STATE_BOOLEAN;
+								ab.boolState[i].isActive = true;
+							}
+							break;
+						}
+						case XR_ACTION_TYPE_FLOAT_INPUT:
+						{
+							ActionFloat &af = w.mActionsFloat[a.action];
+							*(Action*)&af = a;
+							for(int i = 0; i < USER_PATH_COUNT; i++)
+							{
+								af.floatState[i].type = XR_TYPE_ACTION_STATE_FLOAT;
+								af.floatState[i].isActive = true;
+							}
+							break;
+						}
+						default:
+							break;
+					}
+				}
 			}
 
 		}
@@ -528,6 +626,8 @@ XrResult thisLayer_xrGetInstanceProcAddr(XrInstance instance, const char* name, 
 	WRAP_FUNC(xrCreateSession);
 	WRAP_FUNC(xrGetActionStateBoolean);
 	WRAP_FUNC(xrGetActionStateFloat);
+	WRAP_FUNC(xrSyncActions);
+	WRAP_FUNC(xrWaitFrame);
 
 #if XR_THISLAYER_HAS_EXTENSIONS
 	if(Layer::mInstances[i].IsExtensionEnabled("XR_TEST_test_me"))
