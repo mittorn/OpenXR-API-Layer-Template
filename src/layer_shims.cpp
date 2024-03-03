@@ -12,6 +12,10 @@
 #include <stdio.h>
 #include <math.h>
 #include "layer_utl.h"
+#define FMT_ENABLE_STDIO
+#include "fmt_util.h"
+
+#define Log(...) FPrint(stderr, __VA_ARGS__)
 
 //Define next function pointer
 #define DECLARE_NEXT_FUNC(x) PFN_##x nextLayer_##x
@@ -413,12 +417,12 @@ struct Layer
 	void DumpActionSet(XrSession session, XrActionSet s)
 	{
 		ActionSet &seti = gActionSetInfos[s];
-		printf("Attached action set: %s %s\n", seti.info.actionSetName, seti.info.localizedActionSetName );
+		Log("Attached action set: %s %s\n", seti.info.actionSetName, seti.info.localizedActionSetName );
 		for(int i = 0; i < seti.mActions.count; i++ )
 		{
 			Action &as = seti.mActions[i];
 			XrActionCreateInfo &cinfo = as.info;
-			printf("info %p: %s %s\n", (void*)as.action, cinfo.actionName, cinfo.localizedActionName);
+			Log("info %p: %s %s\n", (void*)as.action, cinfo.actionName, cinfo.localizedActionName);
 			XrBoundSourcesForActionEnumerateInfo einfo = {XR_TYPE_BOUND_SOURCES_FOR_ACTION_ENUMERATE_INFO};
 			einfo.action = as.action;
 			uint32_t count;
@@ -438,13 +442,13 @@ struct Layer
 					{
 						char str[slen + 1];
 						nextLayer_xrGetInputSourceLocalizedName(session, &linfo, slen + 1, &slen, str);
-						printf("Description %s\n", str);
+						Log("Description %s\n", (char*)str);
 					}
 					nextLayer_xrPathToString(seti.instance, paths[j], 0, &slen, NULL);
 					{
 						char str[slen + 1];
 						nextLayer_xrPathToString(seti.instance, paths[j], slen + 1, &slen, str);
-						printf("raw_path %s\n", str);
+						Log("raw_path %s\n", (char*)str);
 					}
 				}
 			}
@@ -555,7 +559,7 @@ struct Layer
 					char profileStr[XR_MAX_PATH_LENGTH];
 					uint32_t len;
 					nextLayer_xrPathToString(instance, state.interactionProfile, XR_MAX_PATH_LENGTH, &len, profileStr);
-					printf("New interaction profile for %s: %s\n", mszUserPaths[i], profileStr );
+					Log("New interaction profile for %s: %s\n", mszUserPaths[i], profileStr );
 				}
 				for(int i = 0; i < w->mActionSetsCount; i++)
 					DumpActionSet(mActiveSession, w->mActionSets[i]);
