@@ -73,7 +73,7 @@ so enabling compiler optimization is very recommended
 #define stbsp__ddmultlo(oh, ol, xh, xl, yh, yl) ol = ol + (xh * yl + xl * yh);
 #define stbsp__ddmultlos(oh, ol, xh, yl) ol = ol + (xh * yl);
 
-forceinline static inline void stbsp__raise_to_power10(double *ohi, double *olo, double d, stbsp__int32 power) // power can be -323 to +350
+forceinline static inline void fmtutil_stbsp__raise_to_power10(double *ohi, double *olo, double d, stbsp__int32 power) // power can be -323 to +350
 {
 	constexpr static double const stbsp__bot[23] = {
 		1e+000, 1e+001, 1e+002, 1e+003, 1e+004, 1e+005, 1e+006, 1e+007, 1e+008, 1e+009, 1e+010, 1e+011,
@@ -186,7 +186,7 @@ forceinline static inline void stbsp__raise_to_power10(double *ohi, double *olo,
 //   decimal point in decimal_pos.  +/-INF and NAN are specified by special values
 //   returned in the decimal_pos parameter.
 // frac_digits is absolute normally, but if you want from first significant digits (got %g and %e), or in 0x80000000
-static inline stbsp__int32 stbsp__real_to_str(char const **start, stbsp__uint32 *len, char *out, stbsp__int32 *decimal_pos, double d, stbsp__uint32 frac_digits)
+forceinline static inline stbsp__int32 fmtutil_stbsp__real_to_str(char const **start, stbsp__uint32 *len, char *out, stbsp__int32 *decimal_pos, double d, stbsp__uint32 frac_digits)
 {
 	constexpr static stbsp__uint64 const stbsp__powten[20] = {
 		1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000,
@@ -242,7 +242,7 @@ static inline stbsp__int32 stbsp__real_to_str(char const **start, stbsp__uint32 
 		tens = (tens < 0) ? ((tens * 617) / 2048) : (((tens * 1233) / 4096) + 1);
 
 		// move the significant bits into position and stick them into an int
-		stbsp__raise_to_power10(&ph, &pl, d, 18 - tens);
+		fmtutil_stbsp__raise_to_power10(&ph, &pl, d, 18 - tens);
 
 		// get full as much precision from double-double as possible
 		stbsp__ddtoS64(bits, ph, pl);
@@ -491,7 +491,7 @@ forceinline static inline void ConvertF(OutputBuffer &s, Arg arg, size_t fw, int
 				pr = 6;
 
 			// get number in digit form with decimal point position
-			if(stbsp__real_to_str(&s2, &l, s1, &dp, (double)arg,pr))
+			if(fmtutil_stbsp__real_to_str(&s2, &l, s1, &dp, (double)arg,pr))
 			{
 				if(fw)
 					fw--;
@@ -590,7 +590,7 @@ forceinline static inline void ConvertE(OutputBuffer &s, Arg arg, size_t fw, int
 			if(pr <0)
 				pr = 6;
 
-			if(stbsp__real_to_str(&s2, &l, s1, &dp, (double)arg,pr))
+			if(fmtutil_stbsp__real_to_str(&s2, &l, s1, &dp, (double)arg,pr))
 			{
 				if(fw)
 					fw--;
