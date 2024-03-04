@@ -899,6 +899,13 @@ template<size_t fmtlen,  typename Arg> forceinline inline void SPrint_impl(Outpu
 		s.w(fmt[ss++]);
 }
 
+template<size_t fmtlen> forceinline inline void SPrint_impl(OutputBuffer &s, size_t p, char const (&fmt)[fmtlen])
+{
+	size_t ss = 0;
+	while(ss<fmtlen)
+		s.w(fmt[ss++]);
+}
+
 
 template<size_t fmtlen, typename Arg, typename ... Args> forceinline inline void SPrint_impl(OutputBuffer &s, size_t p, char const (&fmt)[fmtlen], const Arg& arg, const Args& ... args)
 {
