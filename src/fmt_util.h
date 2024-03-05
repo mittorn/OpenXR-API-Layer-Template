@@ -186,7 +186,7 @@ forceinline static inline void fmtutil_stbsp__raise_to_power10(double *ohi, doub
 //   decimal point in decimal_pos.  +/-INF and NAN are specified by special values
 //   returned in the decimal_pos parameter.
 // frac_digits is absolute normally, but if you want from first significant digits (got %g and %e), or in 0x80000000
-forceinline static inline stbsp__int32 fmtutil_stbsp__real_to_str(char const **start, stbsp__uint32 *len, char *out, stbsp__int32 *decimal_pos, double d, stbsp__uint32 frac_digits)
+static inline stbsp__int32 fmtutil_stbsp__real_to_str(char const **start, stbsp__uint32 *len, char *out, stbsp__int32 *decimal_pos, double d, stbsp__uint32 frac_digits)
 {
 	constexpr static stbsp__uint64 const stbsp__powten[20] = {
 		1, 10, 100, 1000, 10000, 100000, 1000000, 10000000, 100000000,
@@ -278,24 +278,21 @@ forceinline static inline stbsp__int32 fmtutil_stbsp__real_to_str(char const **s
 	}
 
 	// kill long trailing runs of zeros
-	#pragma GCC unroll 128
-	for(int i = 0; i < 6; i++)
-	{
-			stbsp__uint64 n = !(bits % 1000) - 1;
-			bits = (~n & (bits / 1000)) | (n & bits);
-	}
+	while(!(bits % 1000))
+		bits /= 1000;
 
 	// convert to string
-	out += 64;
+	out += 24;
 	e = 0;
 	stbsp__uint64 n = bits;
 #pragma GCC unroll 128
 	for(int i = 0; i < 19; i++)
 	{
-		int o = n > 0;
 		*out = (n % 10) + '0';
-		out -= o, e+= o;
 		n /= 10;
+		if(!n)
+			break;
+		out --, e++;
 	}
 	if ((e) && (out[0] == '0'))
 		out++,e--;
@@ -373,6 +370,25 @@ enum Formats {
 // helps incapsulate write operations
 // preventing compiler from trying unroll write
 // and fail all unrols at all
+template <size_t blen> struct FixedOutputBuffer
+{
+	char *buf;
+	size_t left = blen;
+	forceinline void w(char c)
+	{
+		*buf = c;
+		buf += left > 0;
+		left--;
+	}
+
+	forceinline void w(const char *s, int len)
+	{
+#pragma GCC unroll 8
+		for(size_t t = 0; t < len; t++ )
+			w(s[t]);
+	}
+};
+
 struct OutputBuffer
 {
 	char *buf;
@@ -385,8 +401,6 @@ struct OutputBuffer
 		*buf = c;
 		buf += ((size_t)(buf - end)) >> 63;
 	}
-	// allow user provide own OutputBuffer with flush callbacks?
-	// Anyway, any checks/branching here may blow-up
 
 	forceinline void w(const char *s, int len)
 	{
@@ -399,8 +413,8 @@ struct OutputBuffer
 // Format wrappers
 
 // octal, hex or binary
-template<unsigned int bits,class Arg>
-forceinline static inline void ConvertH(OutputBuffer &s, Arg arg, char fmtc, size_t fw, char lead)
+template<unsigned int bits,typename Buf, class Arg>
+forceinline static inline void ConvertH(Buf &s, Arg arg, char fmtc, size_t fw, char lead)
 {
 	OverloadCheck(can_convert, &arg, (unsigned long long)*x);
 	if constexpr(can_convert)
@@ -408,10 +422,14 @@ forceinline static inline void ConvertH(OutputBuffer &s, Arg arg, char fmtc, siz
 		// allow uppercase by setting 0x10 (1<<4) bit
 		constexpr const char hex[] = "0123456789abcdef0123456789ABCDEF";
 		unsigned long long n = (unsigned long long)arg;
-
-		// print entre argument if size not specified
+		double ff = (double)(n|1); // detect MSB with double exp
+		unsigned int chars = (((*(1+(unsigned int *)&ff))>>20)-1023) / bits + 1;
+		if(fw < chars)
+			fw = chars;
 		if(fw == 0)
 			fw = sizeof(Arg)*2;
+		if constexpr(bits == 3)
+			fw++;
 
 		while(fw)
 			s.w(hex[(n >> bits *--fw)& ((1 << bits) - 1) | (fmtc == 'X') << 4]);
@@ -421,8 +439,8 @@ forceinline static inline void ConvertH(OutputBuffer &s, Arg arg, char fmtc, siz
 }
 
 // integer
-template<class Arg>
-forceinline static inline void ConvertI(OutputBuffer &s, Arg arg, char fmtc, size_t fw, char lead, char sign)
+template<typename Buf, class Arg>
+forceinline static inline void ConvertI(Buf &s, Arg arg, char fmtc, size_t fw, char lead, char sign)
 {
 	OverloadCheck(can_convert, &arg, (unsigned long long)*x);
 	// cannot change sign on pointers or sign-compare with zero, so it's special case
@@ -446,34 +464,28 @@ forceinline static inline void ConvertI(OutputBuffer &s, Arg arg, char fmtc, siz
 		{
 			*--s2 = (char)(n % 10) + '0';
 			n /= 10;
-			if(fw)
-				fw--;
+			if(fw) fw--;
 		}
 
 		// place for sign
-		if(sign && fw)
-			fw--;
+		if(sign && fw) fw--;
 
 		//fill field
-		while(fw--)
-			s.w(lead);
+		while(fw--) s.w(lead);
 		// place for sign
-		if(sign)
-			s.w(sign);
+		if(sign) s.w(sign);
 		// special case for 0
-		if(s2 == s1 + 31)
-			s.w('0');
+		if(s2 == s1 + 31) s.w('0');
 		// copy to output
-		while(*s2)
-			s.w(*s2++);
+		while(*s2)s.w(*s2++);
 	}
 	else
 		s.w(__PRETTY_FUNCTION__, sizeof(__PRETTY_FUNCTION__));
 }
 
 // float without exponent
-template<class Arg>
-forceinline static inline void ConvertF(OutputBuffer &s, Arg arg, size_t fw, int pr, char lead, char sign )
+template<typename Buf, class Arg>
+forceinline static inline void ConvertF(Buf &s, Arg arg, size_t fw, int pr, char lead, char sign )
 {
 	OverloadCheck(can_convert, &arg, (double)*x);
 	if constexpr(can_convert)
@@ -481,7 +493,7 @@ forceinline static inline void ConvertF(OutputBuffer &s, Arg arg, size_t fw, int
 		// just skip heavy bloating point if argument is not floating
 		if constexpr(((Arg)0.1f) != (Arg)0.0f)
 		{
-			char s1[512];
+			char s1[32];
 			const char *s2; // digits start
 			unsigned int l; // raw digits len
 			unsigned int n = 10;
@@ -503,7 +515,7 @@ forceinline static inline void ConvertF(OutputBuffer &s, Arg arg, size_t fw, int
 			{
 				// only extending is supported
 				if(lead == '0')
-					s.w(sign),sign = 0;;
+					s.w(sign),sign = 0;
 				if(dp > l)
 				{
 					while(fw-- > dp - 2)
@@ -552,9 +564,9 @@ forceinline static inline void ConvertF(OutputBuffer &s, Arg arg, size_t fw, int
 					}
 					else // 00XXX.XXX
 					{
-						n = 0;
-						while(*s2 && n < dp)
-							s.w(*s2++),n++;
+						int n1 = 0;
+						while(*s2 && n1 < dp)
+							s.w(*s2++),n1++;
 						if(*s2)
 							s.w('.');
 					}
@@ -572,8 +584,8 @@ forceinline static inline void ConvertF(OutputBuffer &s, Arg arg, size_t fw, int
 }
 
 // expoonent float format
-template<class Arg>
-forceinline static inline void ConvertE(OutputBuffer &s, Arg arg, size_t fw, int pr, char sign )
+template<typename Buf, class Arg>
+forceinline static inline void ConvertE(Buf &s, Arg arg, size_t fw, int pr, char sign )
 {
 	OverloadCheck(can_convert, &arg, (double)*x);
 	if constexpr(can_convert)
@@ -581,7 +593,7 @@ forceinline static inline void ConvertE(OutputBuffer &s, Arg arg, size_t fw, int
 		// just skip heavy bloating point if argument is not floating
 		if constexpr(((Arg)0.1f) != (Arg)0.0f)
 		{
-			char s1[512];
+			char s1[32];
 			const char *s2; // digits start
 			unsigned int l; // raw digits len
 			unsigned int n = 10;
@@ -642,8 +654,8 @@ forceinline static inline void ConvertE(OutputBuffer &s, Arg arg, size_t fw, int
 }
 
 // autodetect exponent/float formats
-template<class Arg>
-forceinline static inline void ConvertG(OutputBuffer &s, Arg arg, size_t fw, int pr, char sign )
+template<typename Buf, class Arg>
+forceinline static inline void ConvertG(Buf &s, Arg arg, size_t fw, int pr, char sign )
 {
 	OverloadCheck(can_convert, &arg, (double)*x);
 	if constexpr(can_convert)
@@ -665,8 +677,8 @@ forceinline static inline void ConvertG(OutputBuffer &s, Arg arg, size_t fw, int
 }
 
 // strcpy-like, fields are not supported
-template<class Arg>
-forceinline static inline void ConvertS(OutputBuffer &s, Arg arg)
+template<typename Buf, class Arg>
+forceinline static inline void ConvertS(Buf &s, Arg arg)
 {
 	OverloadCheck(can_convert, &arg, (const char)(*x)[1]);
 	if constexpr(can_convert)
@@ -680,8 +692,8 @@ forceinline static inline void ConvertS(OutputBuffer &s, Arg arg)
 }
 
 // single char
-template<class Arg>
-forceinline static inline void ConvertC(OutputBuffer &s, Arg arg)
+template<typename Buf, class Arg>
+forceinline static inline void ConvertC(Buf &s, Arg arg)
 {
 	OverloadCheck(can_convert, &arg, (const char)(*x));
 	if constexpr(can_convert)
@@ -782,8 +794,8 @@ struct BakedFlags {
 #endif
 };
 
-template<class Arg, size_t fmtlen>
-static inline forceinline size_t PrintArgument(OutputBuffer &s, size_t p1, const char (&fmt)[fmtlen], const Arg &arg)
+template<typename Buf, class Arg, size_t fmtlen>
+static inline forceinline size_t PrintArgument(Buf &s, size_t p1, const char (&fmt)[fmtlen], const Arg &arg)
 {
 	size_t p;
 	constexpr const BakedFlags baked_flags = BakedFlags();
@@ -891,7 +903,7 @@ static inline forceinline size_t PrintArgument(OutputBuffer &s, size_t p1, const
 }
 
 // arguments unfolding
-template<size_t fmtlen,  typename Arg> forceinline inline void SPrint_impl(OutputBuffer &s, size_t p, char const (&fmt)[fmtlen], const Arg& arg)
+template<typename Buf, size_t fmtlen,  typename Arg> forceinline inline void SPrint_impl(Buf &s, size_t p, char const (&fmt)[fmtlen], const Arg& arg)
 {
 	size_t ss = PrintArgument(s, p,  fmt,arg);
 	// copy trailing format chars or '%''s for missing args
@@ -899,15 +911,14 @@ template<size_t fmtlen,  typename Arg> forceinline inline void SPrint_impl(Outpu
 		s.w(fmt[ss++]);
 }
 
-template<size_t fmtlen> forceinline inline void SPrint_impl(OutputBuffer &s, size_t p, char const (&fmt)[fmtlen])
+template<typename Buf, size_t fmtlen> forceinline inline void SPrint_impl(Buf &s, size_t p, char const (&fmt)[fmtlen])
 {
 	size_t ss = 0;
 	while(ss<fmtlen)
 		s.w(fmt[ss++]);
 }
 
-
-template<size_t fmtlen, typename Arg, typename ... Args> forceinline inline void SPrint_impl(OutputBuffer &s, size_t p, char const (&fmt)[fmtlen], const Arg& arg, const Args& ... args)
+template<typename Buf, size_t fmtlen, typename Arg, typename ... Args> forceinline inline void SPrint_impl(Buf &s, size_t p, char const (&fmt)[fmtlen], const Arg& arg, const Args& ... args)
 {
 	size_t ss = PrintArgument(s, p, fmt,arg);
 	SPrint_impl(s, ss, fmt, args...);
@@ -917,7 +928,7 @@ template<size_t fmtlen, typename Arg, typename ... Args> forceinline inline void
 ///TODO: hide under namespace or change naming
 template<size_t fmtlen, size_t buflen, typename ... Args> forceinline inline int SBPrint(char (&buf)[buflen], char const (&fmt)[fmtlen], const Args& ... args)
 {
-	OutputBuffer s{buf, &buf[buflen]};
+	FixedOutputBuffer<buflen> s{buf};
 	SPrint_impl(s, 0, fmt, args...);
 	return s.buf - buf;
 }
@@ -934,13 +945,11 @@ template<size_t fmtlen, typename ... Args> forceinline inline int SNPrint(char *
 template<size_t fmtlen, typename ... Args> forceinline inline int FPrint(FILE *f, char const (&fmt)[fmtlen], const Args& ... args)
 {
 	char buf[1024];
-	OutputBuffer s{buf, &buf[1024]};
+	FixedOutputBuffer<1024> s{buf};
 	SPrint_impl(s, 0, fmt, args...);
 	fputs(buf,f);
 	return s.buf - buf;
 }
-
-
 #endif
 
 
