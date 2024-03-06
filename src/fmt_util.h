@@ -31,6 +31,7 @@ so enabling compiler optimization is very recommended
 // stb_sprintf float utility
 #define STBSP__SPECIAL 0x7000
 
+#include <string.h>
 #define stbsp__uint32 unsigned int
 #define stbsp__int32 signed int
 #define stbsp__uint64 unsigned long long
@@ -186,23 +187,31 @@ struct TenPowers
 {
 	unsigned long long pow[20];
 	unsigned char rev[64];
-	constexpr TenPowers() : pow(), rev() {
+	unsigned char dp[200];
+	constexpr TenPowers() : pow(), rev(), dp() {
 		unsigned long long p = 1;
 
-		for(int i = 0; i < 20; i++)
+		for(unsigned int i = 0; i < 20; i++)
 		{
 			pow[i] = p;
 			p *= 10;
 		}
-		for(int i = 0; i < 64; i++)
+		for(unsigned int i = 0; i < 64; i++)
 		{
 			char b = 0;
 			for(int j = 0; j < 20; j++)
 				if(pow[j] <= 1ULL << i) b = j + 1;
 			rev[i] = b;
 		}
+		for(unsigned int i = 0; i < 100; i++)
+		{
+			dp[i*2] = i / 10 + '0';
+			dp[i*2+1] = i % 10 + '0';
+		}
 	}
 };
+
+constexpr TenPowers tenPowers;
 forceinline static inline size_t GetMsb(unsigned long long n)
 {
 #ifdef __GNUC__
@@ -212,30 +221,20 @@ forceinline static inline size_t GetMsb(unsigned long long n)
 	return ((*(1+(unsigned int *)&ff))>>20)-1023;
 #endif
 }
-constexpr TenPowers tenPowers;
 
-// given a float value, returns the significant bits in bits, and the position of the
-//   decimal point in decimal_pos.  +/-INF and NAN are specified by special values
-//   returned in the decimal_pos parameter.
-// frac_digits is absolute normally, but if you want from first significant digits (got %g and %e), or in 0x80000000
-static inline stbsp__int32 fmtutil_stbsp__real_to_str(char const **start, stbsp__uint32 *len, char *out, stbsp__int32 *decimal_pos, double d, stbsp__uint32 frac_digits)
+static inline unsigned long long RealToU64(int *decimal_pos, double d, unsigned int frac_digits)
 {
 	constexpr static stbsp__uint64 const stbsp__tento19th = 1000000000000000000ULL;
 	stbsp__int64 bits = 0;
-	stbsp__int32 expo, e, ng, tens;
+	stbsp__int32 expo, e, tens;
 
 	STBSP__COPYFP(bits, d);
 	expo = (stbsp__int32)((bits >> 52) & 2047);
-	ng = (stbsp__int32)((stbsp__uint64) bits >> 63);
-	if (ng)
-		d = -d;
 
 	if (expo == 2047) // is nan or inf?
 	{
-		*start = (bits & ((((stbsp__uint64)1) << 52) - 1)) ? "NaN" : "Inf";
 		*decimal_pos = STBSP__SPECIAL;
-		*len = 3;
-		return ng;
+		return bits;
 	}
 
 	if (expo == 0) // is zero or denormal
@@ -243,10 +242,7 @@ static inline stbsp__int32 fmtutil_stbsp__real_to_str(char const **start, stbsp_
 		if (((stbsp__uint64) bits << 1) == 0) // do zero
 		{
 			*decimal_pos = 1;
-			*start = out;
-			out[0] = '0';
-			*len = 1;
-			return ng;
+			return 0;
 		}
 		// find the right expo for denormals
 		{
@@ -283,7 +279,7 @@ static inline stbsp__int32 fmtutil_stbsp__real_to_str(char const **start, stbsp_
 		stbsp__uint32 dg = 1;
 		if ((stbsp__uint64)bits >= tenPowers.pow[9])
 			dg = 10;
-		#pragma GCC unroll 128
+#pragma GCC unroll 128
 		for( int i = dg; i < 20; i++)
 			dg += (stbsp__uint64)bits >= tenPowers.pow[i];
 
@@ -306,27 +302,10 @@ static inline stbsp__int32 fmtutil_stbsp__real_to_str(char const **start, stbsp_
 	while(!(bits % 1000))
 		bits /= 1000;
 
-	// convert to string
-	out += 24;
-	e = 0;
-	stbsp__uint64 n = bits;
-#pragma GCC unroll 128
-	for(int i = 0; i < 19; i++)
-	{
-		*out = (n % 10) + '0';
-		n /= 10;
-		if(!n)
-			break;
-		out --, e++;
-	}
-	if ((e) && (out[0] == '0'))
-		out++,e--;
-	e++;
 	*decimal_pos = tens;
-	*start = out;
-	*len = e;
-	return ng;
+	return bits;
 }
+
 #undef stbsp__ddtoS64
 #undef STBSP__COPYFP
 
@@ -481,7 +460,7 @@ forceinline static inline void ConvertI(Buf &s, Arg arg, char fmtc, size_t fw, c
 				n = -arg, sign = '-';
 		}
 
-		int b = tenPowers.rev[GetMsb(n|1)];
+		int b = tenPowers.rev[GetMsb(n|1)] + (n >= tenPowers.pow[tenPowers.rev[GetMsb(n|1)]]);
 		int i = 0;
 		if(fw && sign)
 			fw--;
@@ -492,22 +471,21 @@ forceinline static inline void ConvertI(Buf &s, Arg arg, char fmtc, size_t fw, c
 			s.w(lead);
 		if(sign)
 			s.w(sign);
-		const char *digitpairs = "00010203040506070809101112131415161718192021222324"
-								 "25262728293031323334353637383940414243444546474849"
-								 "50515253545556575859606162636465666768697071727374"
-								 "75767778798081828384858687888990919293949596979899";
 		int b2 = b;
 		if( b & 1)
-			n = n * 10, b++,i++;
+			i++,b2--;
+
 		if(b > s.left)
 			b = b2 = s.left;
 		s.buf += b;
 		while(i < b)
 		{
-			memcpy(s.buf-=2, &digitpairs[(n % 100) << 1] + (b & 1), 2);
+			memcpy(s.buf-=2, &tenPowers.dp[(n % 100) << 1], 2);
 			n /= 100;
 			i+=2;
 		}
+		if(b != b2)
+			*(s.buf-1) = n + '0';
 		s.buf += b2, s.left -= b2;
 	}
 	else
@@ -516,7 +494,7 @@ forceinline static inline void ConvertI(Buf &s, Arg arg, char fmtc, size_t fw, c
 
 // float without exponent
 template<typename Buf, class Arg>
-forceinline static inline void ConvertF(Buf &s, Arg arg, size_t fw, int pr, char lead, char sign )
+forceinline static inline void ConvertF(Buf &s, Arg arg, int fw, int pr, char lead, char sign )
 {
 	OverloadCheck(can_convert, &arg, (double)*x);
 	if constexpr(can_convert)
@@ -524,16 +502,12 @@ forceinline static inline void ConvertF(Buf &s, Arg arg, size_t fw, int pr, char
 		// just skip heavy bloating point if argument is not floating
 		if constexpr(((Arg)0.1f) != (Arg)0.0f)
 		{
-			char s1[32];
-			const char *s2; // digits start
-			unsigned int l; // raw digits len
-			unsigned int n = 10;
 			int dp; // decimal point
 
 			if(pr <0)
 				pr = 6;
 
-			if(pr == 6 && fw == 0 && arg > 0.00001 && arg < 999999.0 )
+			if(pr == 6 && fw <= 0 && arg > 0.00001 && arg < 999999.0 )
 			{
 				unsigned long long low1= (arg * 1000000.0);
 				unsigned int low = low1 % 1000000;
@@ -560,79 +534,59 @@ forceinline static inline void ConvertF(Buf &s, Arg arg, size_t fw, int pr, char
 			}
 			else
 			{
-				// get number in digit form with decimal point position
-				if(fmtutil_stbsp__real_to_str(&s2, &l, s1, &dp, (double)arg,pr))
+				double d;
+				if(arg < (Arg)0.0)
+					fw--, sign = '-', d = -arg;
+				else
+					d = arg;
+				unsigned long long num = RealToU64(&dp, d, pr);
+				int l = tenPowers.rev[GetMsb(num|1)] + (num >= tenPowers.pow[tenPowers.rev[GetMsb(num|1)]]);
+				int digits_vis = l + 1;
+				int dp_vis = l - dp;
+				if(dp < 0)
 				{
-					if(fw)
-						fw--;
-					sign = '-';
+					digits_vis -= dp;
+				}
+				else if(dp >= l)
+				{
+					digits_vis += dp - l - 1;
+				}
+				else
+				{
+
 				}
 
-				// handle field width and sign
-				if(dp != STBSP__SPECIAL)
+				int i = 0;
+
+				s.buf += digits_vis;
+				while(i+1 < dp_vis)
 				{
-					// only extending is supported
-					if(lead == '0')
-						s.w(sign),sign = 0;
-					if(dp > l)
-					{
-						while(fw-- > dp - 2)
-							s.w(lead);
-					}
-					else if(dp > 0)
-					{
-						while(fw-- > l - 2)
-							s.w(lead);
-					}
-					if(sign)
-						s.w(sign);
+					memcpy(s.buf-=2, &tenPowers.dp[(num % 100) << 1], 2);
+					num /= 100;
+					i+=2;
+				}
+				if(i < dp_vis)
+					*--s.buf = num%10 + '0',num/=10,i++;
+
+				if(dp_vis <= 0)
+				{
+					while(dp_vis++ <0)
+						*--s.buf = '0';
+				}
+				else
+				{
+					*--s.buf = '.';
 				}
 
-				// limit array and
-				((char*)s2)[l] = 0;
-
-				// do actual copy, place decimal point and
-				if(dp != STBSP__SPECIAL)
+				while(i+1 < l)
 				{
-					if(dp <= 0) // 0.00000x
-					{
-						unsigned int n1 = -dp;
-						if((int)n1>pr)
-						{
-							// cut number for given precision
-							n1 = n = pr;
-						}
-						s.w('0');
-						if(pr)
-							s.w('.');
-						while(n1--)
-							s.w('0');
-					}
-					else
-					{
-						if(dp > l) // XX00000.00000
-						{
-							n = 0;
-							while(*s2 && n < l)
-								s.w(*s2++),n++;
-							while(n < dp)
-								s.w('0'),n++;
-							if(*s2)
-								s.w('.');
-						}
-						else // 00XXX.XXX
-						{
-							int n1 = 0;
-							while(*s2 && n1 < dp)
-								s.w(*s2++),n1++;
-							if(*s2)
-								s.w('.');
-						}
-					}
+					memcpy(s.buf-=2, &tenPowers.dp[(num % 100) << 1], 2);
+					num /= 100;
+					i+=2;
 				}
-
-				while(*s2 && n > 0)
-					s.w(*s2++),n--;
+				if(i < l)
+					*--s.buf = num%10 + '0',num/=10,i++;
+				s.buf += i+1,s.left -= i+1;
 			}
 		}
 		else // exclude integer types during template unfolding
@@ -644,7 +598,7 @@ forceinline static inline void ConvertF(Buf &s, Arg arg, size_t fw, int pr, char
 
 // expoonent float format
 template<typename Buf, class Arg>
-forceinline static inline void ConvertE(Buf &s, Arg arg, size_t fw, int pr, char sign )
+forceinline static inline void ConvertE(Buf &s, Arg arg, int fw, int pr, char sign )
 {
 	OverloadCheck(can_convert, &arg, (double)*x);
 	if constexpr(can_convert)
@@ -652,58 +606,56 @@ forceinline static inline void ConvertE(Buf &s, Arg arg, size_t fw, int pr, char
 		// just skip heavy bloating point if argument is not floating
 		if constexpr(((Arg)0.1f) != (Arg)0.0f)
 		{
-			char s1[32];
-			const char *s2; // digits start
-			unsigned int l; // raw digits len
 			unsigned int n = 10;
 			int dp; // decimal point
+			double d;
 
 			if(pr <0)
 				pr = 6;
+			if(arg < (Arg)0.0)
+				fw--, sign = '-', d = -arg;
+			else
+				d = arg;
 
-			if(fmtutil_stbsp__real_to_str(&s2, &l, s1, &dp, (double)arg,pr))
-			{
-				if(fw)
-					fw--;
-				sign = '-';
-			}
-
+			unsigned long long num = RealToU64(&dp, d, pr);
+			int l = tenPowers.rev[GetMsb(num|1)] + (num >= tenPowers.pow[tenPowers.rev[GetMsb(num|1)]]);
 
 			if(sign)
 				s.w(sign);
-
-			if(dp != STBSP__SPECIAL)
+			s.buf += l > 1?l + 1: 1;
+			int i = 0;
+			while(i+2 < l)
 			{
-				// first digit and point
-				s.w(*s2++);
-				s.w('.');
-				if ((l - 1) > (unsigned int)pr)
-					l = pr + 1;
+				memcpy(s.buf-=2, &tenPowers.dp[(num % 100) << 1], 2);
+				num /= 100;
+				i+=2;
 			}
-			// copy leftover
-			((char*)s2)[l] = 0;
-
-			while(*s2 && n > 0)
-				s.w(*s2++),n--;
-
-			// write exponent suffix
-			if(dp != STBSP__SPECIAL)
+			if(i+1 < l)
+				*--s.buf = num%10 + '0',num/=10,i++;
+			if(l > 1)
+				*--s.buf = '.';
+			*--s.buf = num%10 + '0',num/=10,i++;
+			s.buf += l>1? l + 1: 1;
+			s.left -= l>1? l + 1: 1;
+			s.w('e');
+			dp-=1;
+			if(dp < 0)
 			{
-				s.w('e');
-				if(dp < 0)
-				{
-					dp = -dp;
-					s.w('-');
-				}
-				else
-					s.w('+');
-				n = (dp >= 100) ? 5 : 4;
-				while( n-- > 3)
-				{
-					s.w('0' + (dp % 10));
-					dp/=10;
-				}
+				dp = -dp;
+				s.w('-');
 			}
+			else
+				s.w('+');
+			n = (dp >= 100) ? 3 : 2;
+			int n1 = n;
+			s.buf += n;
+			while( n-- > 0)
+			{
+				*--s.buf = '0' + (dp % 10);
+				dp/=10;
+			}
+			s.buf += n1;
+			s.left -= n1;
 		}
 		else
 			ConvertI(s,arg,0,fw,' ',sign);
@@ -796,7 +748,7 @@ struct BakedFlags {
 				type = FMT_INT;
 				break;
 			case 'u':
-				type = FMT_UINT;
+				type = FMT_INT;
 				break;
 			case 'g':
 			case 'G':
