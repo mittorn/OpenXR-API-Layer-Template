@@ -28,9 +28,6 @@ so enabling compiler optimization is very recommended
 #define forceinline
 #endif // __GNUC__
 
-// stb_sprintf float utility
-#define STBSP__SPECIAL 0x7000
-
 #include <string.h>
 #define stbsp__uint32 unsigned int
 #define stbsp__int32 signed int
@@ -230,12 +227,6 @@ static inline unsigned long long RealToU64(int *decimal_pos, double d, unsigned 
 
 	STBSP__COPYFP(bits, d);
 	expo = (stbsp__int32)((bits >> 52) & 2047);
-
-	if (expo == 2047) // is nan or inf?
-	{
-		*decimal_pos = STBSP__SPECIAL;
-		return bits;
-	}
 
 	if (expo == 0) // is zero or denormal
 	{
@@ -442,6 +433,13 @@ forceinline static inline void ConvertH(Buf &s, Arg arg, char fmtc, size_t fw, c
 		s.w(__PRETTY_FUNCTION__, sizeof(__PRETTY_FUNCTION__));
 }
 
+#define WRITE_PAIRS \
+	{ \
+		memcpy(s.buf-=2, &tenPowers.dp[(num % 100) << 1], 2); \
+		num /= 100; \
+		i+=2; \
+	}
+
 // integer
 template<typename Buf, class Arg>
 forceinline static inline void ConvertI(Buf &s, Arg arg, char fmtc, size_t fw, char lead, char sign)
@@ -451,18 +449,18 @@ forceinline static inline void ConvertI(Buf &s, Arg arg, char fmtc, size_t fw, c
 	OverloadCheck(pointer_type, &arg, **x);
 	if constexpr(can_convert)
 	{
-		unsigned long long n = (unsigned long long)arg;
+		unsigned long long num = (unsigned long long)arg;
 
 		// invert signed types
 		if constexpr(!pointer_type && !CompareTypes(Arg,void*))
 		{
 			if(arg < 0 && fmtc != 'u')
-				n = -arg, sign = '-';
+				num = -arg, sign = '-';
 		}
 
-		int b = tenPowers.rev[GetMsb(n|1)] + (n >= tenPowers.pow[tenPowers.rev[GetMsb(n|1)]]);
+		int b = tenPowers.rev[GetMsb(num|1)] + (num >= tenPowers.pow[tenPowers.rev[GetMsb(num|1)]]);
 		int i = 0;
-		if(fw && sign)
+		if(sign)
 			fw--;
 		if(sign && lead == '0')
 			s.w(sign), sign = 0;
@@ -478,14 +476,9 @@ forceinline static inline void ConvertI(Buf &s, Arg arg, char fmtc, size_t fw, c
 		if(b > s.left)
 			b = b2 = s.left;
 		s.buf += b;
-		while(i < b)
-		{
-			memcpy(s.buf-=2, &tenPowers.dp[(n % 100) << 1], 2);
-			n /= 100;
-			i+=2;
-		}
+		while(i < b) WRITE_PAIRS;
 		if(b != b2)
-			*(s.buf-1) = n + '0';
+			*(s.buf-1) = num + '0';
 		s.buf += b2, s.left -= b2;
 	}
 	else
@@ -503,16 +496,30 @@ forceinline static inline void ConvertF(Buf &s, Arg arg, int fw, int pr, char le
 		if constexpr(((Arg)0.1f) != (Arg)0.0f)
 		{
 			int dp; // decimal point
-
+			double d;
+			if(arg < (Arg)0.0)
+				fw--, sign = '-', d = -arg;
+			else
+				d = arg;
 			if(pr <0)
 				pr = 6;
 
-			if(pr == 6 && fw <= 0 && arg > 0.00001 && arg < 999999.0 )
+			if(((*(((unsigned short*)&d)+3)) >> 4) & 0x7ff == 0x7ff)
 			{
-				unsigned long long low1= (arg * 1000000.0);
+				while(fw-- > 3)
+					s.w(' ');
+				if(sign)
+					s.w(sign);
+				s.w(*(((char*)&d)+ 6) & 0xF? "nan" : "inf", 3);
+			}
+			else if(pr == 6 && fw <= 0 && d > 0.00001 && d < 999999.0 )
+			{
+				unsigned long long low1= (d * 1000000.0);
 				unsigned int low = low1 % 1000000;
-				unsigned int high = arg;
+				unsigned int high = d;
 				unsigned int i;
+				if(sign)
+					s.w(sign);
 				for(i = 100000; high < i; i /= 10);
 				while(i)
 				{
@@ -534,37 +541,26 @@ forceinline static inline void ConvertF(Buf &s, Arg arg, int fw, int pr, char le
 			}
 			else
 			{
-				double d;
-				if(arg < (Arg)0.0)
-					fw--, sign = '-', d = -arg;
-				else
-					d = arg;
 				unsigned long long num = RealToU64(&dp, d, pr);
 				int l = tenPowers.rev[GetMsb(num|1)] + (num >= tenPowers.pow[tenPowers.rev[GetMsb(num|1)]]);
 				int digits_vis = l + 1;
 				int dp_vis = l - dp;
-				if(dp < 0)
-				{
-					digits_vis -= dp;
-				}
-				else if(dp >= l)
-				{
-					digits_vis += dp - l - 1;
-				}
-				else
-				{
-
-				}
-
 				int i = 0;
+				if(dp < 0)
+					digits_vis -= dp;
+				else if(dp >= l)
+					digits_vis += dp - l - 1;
 
+				if(sign && lead == '0')
+					s.w(sign), sign = 0;
+				while(fw-- > digits_vis)
+					s.w(lead);
+				if(sign)
+					s.w(sign);
+				if(digits_vis > s.left)
+					dp_vis -= digits_vis - s.left, l -= digits_vis - s.left;
 				s.buf += digits_vis;
-				while(i+1 < dp_vis)
-				{
-					memcpy(s.buf-=2, &tenPowers.dp[(num % 100) << 1], 2);
-					num /= 100;
-					i+=2;
-				}
+				while(i+1 < dp_vis)WRITE_PAIRS;
 				if(i < dp_vis)
 					*--s.buf = num%10 + '0',num/=10,i++;
 
@@ -578,12 +574,7 @@ forceinline static inline void ConvertF(Buf &s, Arg arg, int fw, int pr, char le
 					*--s.buf = '.';
 				}
 
-				while(i+1 < l)
-				{
-					memcpy(s.buf-=2, &tenPowers.dp[(num % 100) << 1], 2);
-					num /= 100;
-					i+=2;
-				}
+				while(i+1 < l)WRITE_PAIRS;
 				if(i < l)
 					*--s.buf = num%10 + '0',num/=10,i++;
 				s.buf += i+1,s.left -= i+1;
@@ -962,8 +953,6 @@ template<size_t fmtlen, typename ... Args> forceinline inline int FPrint(FILE *f
 	return s.buf - buf;
 }
 #endif
-
-
 #endif // FMT_UTIL_H
 /*
 ------------------------------------------------------------------------------
