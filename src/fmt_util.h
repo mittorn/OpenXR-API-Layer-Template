@@ -26,100 +26,107 @@ so enabling compiler optimization is very recommended
 #define unlikely(x) (x)
 #define noinline
 #define forceinline
+#define __PRETTY_FUNCTION__ "$"
 #endif // __GNUC__
 
-#include <string.h>
 #define stbsp__uint32 unsigned int
 #define stbsp__int32 signed int
 #define stbsp__uint64 unsigned long long
 #define stbsp__int64 signed long long
 #define stbsp__uint16 unsigned short
 
-#define STBSP__COPYFP(dest, src)  *(stbsp__uint64*)&dest = *(stbsp__uint64*)&src
+#if __has_builtin(__builtin_bit_cast)
+template<typename A, typename B>constexpr void STBSP__COPYFP(B &dest, const A&src) {dest = __builtin_bit_cast(B, src);}
+#define CONSTREAL constexpr
+#else
+#define STBSP__COPYFP(dest, src) *(stbsp__uint64*)&dest = *(stbsp__uint64*)&src
+#define CONSTREAL
+#endif
 #define stbsp__ddmulthi(oh, ol, xh, yh)                            \
-   {                                                               \
-	  double ahi = 0, alo, bhi = 0, blo;                           \
-	  stbsp__int64 bt;                                             \
-	  oh = xh * yh;                                                \
-	  STBSP__COPYFP(bt, xh);                                       \
-	  bt &= ((~(stbsp__uint64)0) << 27);                           \
-	  STBSP__COPYFP(ahi, bt);                                      \
-	  alo = xh - ahi;                                              \
-	  STBSP__COPYFP(bt, yh);                                       \
-	  bt &= ((~(stbsp__uint64)0) << 27);                           \
-	  STBSP__COPYFP(bhi, bt);                                      \
-	  blo = yh - bhi;                                              \
-	  ol = ((ahi * bhi - oh) + ahi * blo + alo * bhi) + alo * blo; \
-   }
+{                                                               \
+		double ahi  = 0, alo = 0, bhi = 0, blo = 0;                           \
+		stbsp__int64 bt = 0;                                             \
+		oh = xh * yh;                                                \
+		STBSP__COPYFP(bt, xh);                                       \
+		bt &= ((~(stbsp__uint64)0) << 27);                           \
+		STBSP__COPYFP(ahi, bt);                                      \
+		alo = xh - ahi;                                              \
+		STBSP__COPYFP(bt, yh);                                       \
+		bt &= ((~(stbsp__uint64)0) << 27);                           \
+		STBSP__COPYFP(bhi, bt);                                      \
+		blo = yh - bhi;                                              \
+		ol = ((ahi * bhi - oh) + ahi * blo + alo * bhi) + alo * blo; \
+}
 #define stbsp__ddtoS64(ob, xh, xl)          \
-   {                                        \
-	  double ahi = 0, alo, vh, t;           \
-	  ob = (stbsp__int64)xh;                \
-	  vh = (double)ob;                      \
-	  ahi = (xh - vh);                      \
-	  t = (ahi - xh);                       \
-	  alo = (xh - (ahi - t)) - (vh + t);    \
-	  ob += (stbsp__int64)(ahi + alo + xl); \
-   }
+{                                        \
+		double ahi = 0, alo = 0, vh = 0, t = 0;           \
+		ob = (stbsp__int64)xh;                \
+		vh = (double)ob;                      \
+		ahi = (xh - vh);                      \
+		t = (ahi - xh);                       \
+		alo = (xh - (ahi - t)) - (vh + t);    \
+		ob += (stbsp__int64)(ahi + alo + xl); \
+}
 #define stbsp__ddrenorm(oh, ol) \
-   {                            \
-	  double s;                 \
-	  s = oh + ol;              \
-	  ol = ol - (s - oh);       \
-	  oh = s;                   \
-   }
+{                            \
+		double s = 0;                 \
+		s = oh + ol;              \
+		ol = ol - (s - oh);       \
+		oh = s;                   \
+}
 #define stbsp__ddmultlo(oh, ol, xh, xl, yh, yl) ol = ol + (xh * yl + xl * yh);
 #define stbsp__ddmultlos(oh, ol, xh, yl) ol = ol + (xh * yl);
 
-forceinline static inline void fmtutil_stbsp__raise_to_power10(double *ohi, double *olo, double d, stbsp__int32 power) // power can be -323 to +350
+constexpr static double const fmtutil_stbsp__bot[23] = {
+	1e+000, 1e+001, 1e+002, 1e+003, 1e+004, 1e+005, 1e+006, 1e+007, 1e+008, 1e+009, 1e+010, 1e+011,
+	1e+012, 1e+013, 1e+014, 1e+015, 1e+016, 1e+017, 1e+018, 1e+019, 1e+020, 1e+021, 1e+022
+};
+constexpr static double const fmtutil_stbsp__negbot[22] = {
+	1e-001, 1e-002, 1e-003, 1e-004, 1e-005, 1e-006, 1e-007, 1e-008, 1e-009, 1e-010, 1e-011,
+	1e-012, 1e-013, 1e-014, 1e-015, 1e-016, 1e-017, 1e-018, 1e-019, 1e-020, 1e-021, 1e-022
+};
+constexpr static double const fmtutil_stbsp__negboterr[22] = {
+	-5.551115123125783e-018,  -2.0816681711721684e-019, -2.0816681711721686e-020, -4.7921736023859299e-021, -8.1803053914031305e-022, 4.5251888174113741e-023,
+	4.5251888174113739e-024,  -2.0922560830128471e-025, -6.2281591457779853e-026, -3.6432197315497743e-027, 6.0503030718060191e-028,  2.0113352370744385e-029,
+	-3.0373745563400371e-030, 1.1806906454401013e-032,  -7.7705399876661076e-032, 2.0902213275965398e-033,  -7.1542424054621921e-034, -7.1542424054621926e-035,
+	2.4754073164739869e-036,  5.4846728545790429e-037,  9.2462547772103625e-038,  -4.8596774326570872e-039
+};
+constexpr static double const fmtutil_stbsp__top[13] = {
+	1e+023, 1e+046, 1e+069, 1e+092, 1e+115, 1e+138, 1e+161, 1e+184, 1e+207, 1e+230, 1e+253, 1e+276, 1e+299
+};
+constexpr static double const fmtutil_stbsp__negtop[13] = {
+	1e-023, 1e-046, 1e-069, 1e-092, 1e-115, 1e-138, 1e-161, 1e-184, 1e-207, 1e-230, 1e-253, 1e-276, 1e-299
+};
+constexpr static double const fmtutil_stbsp__toperr[13] = {
+	8388608,
+	6.8601809640529717e+028,
+	-7.253143638152921e+052,
+	-4.3377296974619174e+075,
+	-1.5559416129466825e+098,
+	-3.2841562489204913e+121,
+	-3.7745893248228135e+144,
+	-1.7356668416969134e+167,
+	-3.8893577551088374e+190,
+	-9.9566444326005119e+213,
+	6.3641293062232429e+236,
+	-5.2069140800249813e+259,
+	-5.2504760255204387e+282
+};
+constexpr static double const fntutil_stbsp__negtoperr[13] = {
+	3.9565301985100693e-040,  -2.299904345391321e-063,  3.6506201437945798e-086,  1.1875228833981544e-109,
+	-5.0644902316928607e-132, -6.7156837247865426e-155, -2.812077463003139e-178,  -5.7778912386589953e-201,
+	7.4997100559334532e-224,  -4.6439668915134491e-247, -6.3691100762962136e-270, -9.436808465446358e-293,
+	8.0970921678014997e-317
+};
+
+forceinline CONSTREAL static inline void fmtutil_stbsp__raise_to_power10(double *ohi, double *olo, double d, stbsp__int32 power) // power can be -323 to +350
 {
-	constexpr static double const stbsp__bot[23] = {
-		1e+000, 1e+001, 1e+002, 1e+003, 1e+004, 1e+005, 1e+006, 1e+007, 1e+008, 1e+009, 1e+010, 1e+011,
-		1e+012, 1e+013, 1e+014, 1e+015, 1e+016, 1e+017, 1e+018, 1e+019, 1e+020, 1e+021, 1e+022
-	};
-	constexpr static double const stbsp__negbot[22] = {
-		1e-001, 1e-002, 1e-003, 1e-004, 1e-005, 1e-006, 1e-007, 1e-008, 1e-009, 1e-010, 1e-011,
-		1e-012, 1e-013, 1e-014, 1e-015, 1e-016, 1e-017, 1e-018, 1e-019, 1e-020, 1e-021, 1e-022
-	};
-	constexpr static double const stbsp__negboterr[22] = {
-		-5.551115123125783e-018,  -2.0816681711721684e-019, -2.0816681711721686e-020, -4.7921736023859299e-021, -8.1803053914031305e-022, 4.5251888174113741e-023,
-		4.5251888174113739e-024,  -2.0922560830128471e-025, -6.2281591457779853e-026, -3.6432197315497743e-027, 6.0503030718060191e-028,  2.0113352370744385e-029,
-		-3.0373745563400371e-030, 1.1806906454401013e-032,  -7.7705399876661076e-032, 2.0902213275965398e-033,  -7.1542424054621921e-034, -7.1542424054621926e-035,
-		2.4754073164739869e-036,  5.4846728545790429e-037,  9.2462547772103625e-038,  -4.8596774326570872e-039
-	};
-	constexpr static double const stbsp__top[13] = {
-		1e+023, 1e+046, 1e+069, 1e+092, 1e+115, 1e+138, 1e+161, 1e+184, 1e+207, 1e+230, 1e+253, 1e+276, 1e+299
-	};
-	constexpr static double const stbsp__negtop[13] = {
-		1e-023, 1e-046, 1e-069, 1e-092, 1e-115, 1e-138, 1e-161, 1e-184, 1e-207, 1e-230, 1e-253, 1e-276, 1e-299
-	};
-	constexpr static double const stbsp__toperr[13] = {
-		8388608,
-		6.8601809640529717e+028,
-		-7.253143638152921e+052,
-		-4.3377296974619174e+075,
-		-1.5559416129466825e+098,
-		-3.2841562489204913e+121,
-		-3.7745893248228135e+144,
-		-1.7356668416969134e+167,
-		-3.8893577551088374e+190,
-		-9.9566444326005119e+213,
-		6.3641293062232429e+236,
-		-5.2069140800249813e+259,
-		-5.2504760255204387e+282
-	};
-	constexpr static double const stbsp__negtoperr[13] = {
-		3.9565301985100693e-040,  -2.299904345391321e-063,  3.6506201437945798e-086,  1.1875228833981544e-109,
-		-5.0644902316928607e-132, -6.7156837247865426e-155, -2.812077463003139e-178,  -5.7778912386589953e-201,
-		7.4997100559334532e-224,  -4.6439668915134491e-247, -6.3691100762962136e-270, -9.436808465446358e-293,
-		8.0970921678014997e-317
-	};
-	double ph, pl;
+	double ph = 0, pl = 0;
 	if ((power >= 0) && (power <= 22)) {
-		stbsp__ddmulthi(ph, pl, d, stbsp__bot[power]);
+		stbsp__ddmulthi(ph, pl, d, fmtutil_stbsp__bot[power]);
 	} else {
-		stbsp__int32 e, et, eb;
-		double p2h, p2l;
+		stbsp__int32 e = 0, et = 0, eb = 0;
+		double p2h = 0, p2l = 0;
 
 		e = power;
 		if (power < 0)
@@ -134,14 +141,14 @@ forceinline static inline void fmtutil_stbsp__raise_to_power10(double *ohi, doub
 		if (power < 0) {
 			if (eb) {
 				--eb;
-				stbsp__ddmulthi(ph, pl, d, stbsp__negbot[eb]);
-				stbsp__ddmultlos(ph, pl, d, stbsp__negboterr[eb]);
+				stbsp__ddmulthi(ph, pl, d, fmtutil_stbsp__negbot[eb]);
+				stbsp__ddmultlos(ph, pl, d, fmtutil_stbsp__negboterr[eb]);
 			}
 			if (et) {
 				stbsp__ddrenorm(ph, pl);
 				--et;
-				stbsp__ddmulthi(p2h, p2l, ph, stbsp__negtop[et]);
-				stbsp__ddmultlo(p2h, p2l, ph, pl, stbsp__negtop[et], stbsp__negtoperr[et]);
+				stbsp__ddmulthi(p2h, p2l, ph, fmtutil_stbsp__negtop[et]);
+				stbsp__ddmultlo(p2h, p2l, ph, pl, fmtutil_stbsp__negtop[et], fntutil_stbsp__negtoperr[et]);
 				ph = p2h;
 				pl = p2l;
 			}
@@ -151,11 +158,11 @@ forceinline static inline void fmtutil_stbsp__raise_to_power10(double *ohi, doub
 				if (eb > 22)
 					eb = 22;
 				e -= eb;
-				stbsp__ddmulthi(ph, pl, d, stbsp__bot[eb]);
+				stbsp__ddmulthi(ph, pl, d, fmtutil_stbsp__bot[eb]);
 				if (e) {
 					stbsp__ddrenorm(ph, pl);
-					stbsp__ddmulthi(p2h, p2l, ph, stbsp__bot[e]);
-					stbsp__ddmultlos(p2h, p2l, stbsp__bot[e], pl);
+					stbsp__ddmulthi(p2h, p2l, ph, fmtutil_stbsp__bot[e]);
+					stbsp__ddmultlos(p2h, p2l, fmtutil_stbsp__bot[e], pl);
 					ph = p2h;
 					pl = p2l;
 				}
@@ -163,8 +170,8 @@ forceinline static inline void fmtutil_stbsp__raise_to_power10(double *ohi, doub
 			if (et) {
 				stbsp__ddrenorm(ph, pl);
 				--et;
-				stbsp__ddmulthi(p2h, p2l, ph, stbsp__top[et]);
-				stbsp__ddmultlo(p2h, p2l, ph, pl, stbsp__top[et], stbsp__toperr[et]);
+				stbsp__ddmulthi(p2h, p2l, ph, fmtutil_stbsp__top[et]);
+				stbsp__ddmultlo(p2h, p2l, ph, pl, fmtutil_stbsp__top[et], fmtutil_stbsp__toperr[et]);
 				ph = p2h;
 				pl = p2l;
 			}
@@ -208,10 +215,16 @@ struct TenPowers
 	}
 };
 
+#if __has_builtin(__builtin_clzll)
+#define CONSTZLL constexpr
+#else
+#define CONSTZLL
+#endif
+
 constexpr TenPowers tenPowers;
-forceinline static inline size_t GetMsb(unsigned long long n)
+forceinline CONSTZLL static inline size_t GetMsb(unsigned long long n)
 {
-#ifdef __GNUC__
+#if __has_builtin(__builtin_clzll)
 	return __builtin_clzll(n) ^ 0x3F;
 #else
 	double ff = (double)n;
@@ -219,14 +232,20 @@ forceinline static inline size_t GetMsb(unsigned long long n)
 #endif
 }
 
-static inline unsigned long long RealToU64(int *decimal_pos, double d, unsigned int frac_digits)
+constexpr static stbsp__uint64 const stbsp__tento19th = 1000000000000000000ULL;
+CONSTREAL static inline unsigned long long RealToU64(int *decimal_pos, double d, unsigned int frac_digits)
 {
-	constexpr static stbsp__uint64 const stbsp__tento19th = 1000000000000000000ULL;
 	stbsp__int64 bits = 0;
-	stbsp__int32 expo, e, tens;
+	stbsp__int32 expo = 0, e = 0, tens = 0;
 
 	STBSP__COPYFP(bits, d);
 	expo = (stbsp__int32)((bits >> 52) & 2047);
+	if(expo == 2047)
+	{
+		*decimal_pos = 0x7000;
+		return !!(bits & ((((stbsp__uint64)1) << 52) - 1));
+		return 0;
+	}
 
 	if (expo == 0) // is zero or denormal
 	{
@@ -247,7 +266,7 @@ static inline unsigned long long RealToU64(int *decimal_pos, double d, unsigned 
 
 	// find the decimal exponent as well as the decimal bits of the value
 	{
-		double ph, pl;
+		double ph = 0, pl = 0;
 
 		// log10 estimate - very specifically tweaked to hit or undershoot by no more than 1 of log10 of all expos 1..2046
 		tens = expo - 1023;
@@ -275,7 +294,7 @@ static inline unsigned long long RealToU64(int *decimal_pos, double d, unsigned 
 			dg += (stbsp__uint64)bits >= tenPowers.pow[i];
 
 		if (frac_digits < dg || dg == 20) {
-			stbsp__uint64 r;
+			stbsp__uint64 r = 0;
 			// add 0.5 at the right position and round
 			e = dg - frac_digits;
 			if ((stbsp__uint32)e < 24)
@@ -341,9 +360,9 @@ template<class...Fs> constexpr FunctionOverloadSet<Fs...> FunctionOverload(Fs...
 // if constexpr(can_cast && can_call) { ... }
 // can be combined to single expression in clang, but gcc8 fails with lambda in unelevated context
 #define OverloadCheck(result,pointer,expr) \
-	constexpr auto _gL_##result = FunctionOverload(\
-		[](auto&& x) -> decltype(expr, 1U) {return{};}, \
-		[](...)      -> char { return {}; } \
+constexpr auto _gL_##result = FunctionOverload(\
+											   [](auto&& x) -> decltype(expr, 1U) {return{};}, \
+											   [](...)      -> char { return {}; } \
 	);constexpr auto result = sizeof(decltype(_gL_##result(pointer))) == 4;
 
 // all supported format specifiers
@@ -368,15 +387,16 @@ enum Formats {
 template <size_t blen> struct FixedOutputBuffer
 {
 	char *buf;
-	size_t left = blen;
-	forceinline void w(char c)
+	size_t left;
+	constexpr FixedOutputBuffer(char *a) : buf(a), left(blen){}
+	forceinline constexpr  void w(char c)
 	{
 		*buf = c;
 		buf += left > 0;
 		left--;
 	}
 
-	forceinline void w(const char *s, int len)
+	forceinline constexpr  void w(const char *s, int len)
 	{
 #pragma GCC unroll 8
 		for(size_t t = 0; t < len; t++ )
@@ -384,33 +404,11 @@ template <size_t blen> struct FixedOutputBuffer
 	}
 
 };
-
-struct OutputBuffer
-{
-	char *buf;
-	char *end;
-	forceinline void w(char c)
-	{
-		// branchless bounds checking
-		// with branching compiler may generate
-		// muuuch useless conditional jumps for each char
-		*buf = c;
-		buf += ((size_t)(buf - end)) >> 63;
-	}
-
-	forceinline void w(const char *s, int len)
-	{
-#pragma GCC unroll 8
-		for(size_t t = 0; t < len; t++ )
-			w(s[t]);
-	}
-};
-
 // Format wrappers
 
 // octal, hex or binary
 template<unsigned int bits,typename Buf, class Arg>
-forceinline static inline void ConvertH(Buf &s, Arg arg, char fmtc, size_t fw, char lead)
+forceinline constexpr static inline void ConvertH(Buf &s, Arg arg, char fmtc, size_t fw, char lead)
 {
 	OverloadCheck(can_convert, &arg, (unsigned long long)*x);
 	if constexpr(can_convert)
@@ -434,15 +432,18 @@ forceinline static inline void ConvertH(Buf &s, Arg arg, char fmtc, size_t fw, c
 }
 
 #define WRITE_PAIRS \
-	{ \
-		memcpy(s.buf-=2, &tenPowers.dp[(num % 100) << 1], 2); \
+{ \
+		const unsigned char *pair = &tenPowers.dp[(num % 100) << 1]; \
+		s.buf -= 2; \
+		*s.buf = *pair; \
+		*(s.buf + 1) = *(pair + 1); \
 		num /= 100; \
 		i+=2; \
-	}
+}
 
 // integer
 template<typename Buf, class Arg>
-forceinline static inline void ConvertI(Buf &s, Arg arg, char fmtc, size_t fw, char lead, char sign)
+forceinline constexpr static inline void ConvertI(Buf &s, Arg arg, char fmtc, size_t fw, char lead, char sign)
 {
 	OverloadCheck(can_convert, &arg, (unsigned long long)*x);
 	// cannot change sign on pointers or sign-compare with zero, so it's special case
@@ -487,7 +488,7 @@ forceinline static inline void ConvertI(Buf &s, Arg arg, char fmtc, size_t fw, c
 
 // float without exponent
 template<typename Buf, class Arg>
-forceinline static inline void ConvertF(Buf &s, Arg arg, int fw, int pr, char lead, char sign )
+forceinline constexpr static inline void ConvertF(Buf &s, Arg arg, int fw, int pr, char lead, char sign )
 {
 	OverloadCheck(can_convert, &arg, (double)*x);
 	if constexpr(can_convert)
@@ -495,8 +496,8 @@ forceinline static inline void ConvertF(Buf &s, Arg arg, int fw, int pr, char le
 		// just skip heavy bloating point if argument is not floating
 		if constexpr(((Arg)0.1f) != (Arg)0.0f)
 		{
-			int dp; // decimal point
-			double d;
+			int dp = 0; // decimal point
+			double d = 0;
 			if(arg < (Arg)0.0)
 				fw--, sign = '-', d = -arg;
 			else
@@ -504,20 +505,12 @@ forceinline static inline void ConvertF(Buf &s, Arg arg, int fw, int pr, char le
 			if(pr <0)
 				pr = 6;
 
-			if(((*(((unsigned short*)&d)+3)) >> 4) & 0x7ff == 0x7ff)
-			{
-				while(fw-- > 3)
-					s.w(' ');
-				if(sign)
-					s.w(sign);
-				s.w(*(((char*)&d)+ 6) & 0xF? "nan" : "inf", 3);
-			}
-			else if(pr == 6 && fw <= 0 && d > 0.00001 && d < 999999.0 )
+			if(pr == 6 && fw <= 0 && d > 0.00001 && d < 999999.0 )
 			{
 				unsigned long long low1= (d * 1000000.0);
 				unsigned int low = low1 % 1000000;
 				unsigned int high = d;
-				unsigned int i;
+				unsigned int i = 0;
 				if(sign)
 					s.w(sign);
 				for(i = 100000; high < i; i /= 10);
@@ -542,6 +535,11 @@ forceinline static inline void ConvertF(Buf &s, Arg arg, int fw, int pr, char le
 			else
 			{
 				unsigned long long num = RealToU64(&dp, d, pr);
+				if(dp == 0x7000)
+				{
+					s.w(num? "nan" : "inf", 3);
+					return;
+				}
 				int l = tenPowers.rev[GetMsb(num|1)] + (num >= tenPowers.pow[tenPowers.rev[GetMsb(num|1)]]);
 				int digits_vis = l + 1;
 				int dp_vis = l - dp;
@@ -589,7 +587,7 @@ forceinline static inline void ConvertF(Buf &s, Arg arg, int fw, int pr, char le
 
 // expoonent float format
 template<typename Buf, class Arg>
-forceinline static inline void ConvertE(Buf &s, Arg arg, int fw, int pr, char sign )
+forceinline constexpr static inline void ConvertE(Buf &s, Arg arg, int fw, int pr, char sign )
 {
 	OverloadCheck(can_convert, &arg, (double)*x);
 	if constexpr(can_convert)
@@ -598,8 +596,8 @@ forceinline static inline void ConvertE(Buf &s, Arg arg, int fw, int pr, char si
 		if constexpr(((Arg)0.1f) != (Arg)0.0f)
 		{
 			unsigned int n = 10;
-			int dp; // decimal point
-			double d;
+			int dp = 0; // decimal point
+			double d = 0;
 
 			if(pr <0)
 				pr = 6;
@@ -609,18 +607,18 @@ forceinline static inline void ConvertE(Buf &s, Arg arg, int fw, int pr, char si
 				d = arg;
 
 			unsigned long long num = RealToU64(&dp, d, pr);
+			if(dp == 0x7000)
+			{
+				s.w(num? "nan" : "inf", 3);
+				return;
+			}
 			int l = tenPowers.rev[GetMsb(num|1)] + (num >= tenPowers.pow[tenPowers.rev[GetMsb(num|1)]]);
 
 			if(sign)
 				s.w(sign);
 			s.buf += l > 1?l + 1: 1;
 			int i = 0;
-			while(i+2 < l)
-			{
-				memcpy(s.buf-=2, &tenPowers.dp[(num % 100) << 1], 2);
-				num /= 100;
-				i+=2;
-			}
+			while(i+2 < l)WRITE_PAIRS;
 			if(i+1 < l)
 				*--s.buf = num%10 + '0',num/=10,i++;
 			if(l > 1)
@@ -657,7 +655,7 @@ forceinline static inline void ConvertE(Buf &s, Arg arg, int fw, int pr, char si
 
 // autodetect exponent/float formats
 template<typename Buf, class Arg>
-forceinline static inline void ConvertG(Buf &s, Arg arg, size_t fw, int pr, char sign )
+forceinline constexpr static inline void ConvertG(Buf &s, Arg arg, size_t fw, int pr, char sign )
 {
 	OverloadCheck(can_convert, &arg, (double)*x);
 	if constexpr(can_convert)
@@ -680,12 +678,12 @@ forceinline static inline void ConvertG(Buf &s, Arg arg, size_t fw, int pr, char
 
 // strcpy-like, fields are not supported
 template<typename Buf, class Arg>
-forceinline static inline void ConvertS(Buf &s, Arg arg)
+forceinline constexpr static inline void ConvertS(Buf &s, Arg arg)
 {
 	OverloadCheck(can_convert, &arg, (const char)(*x)[1]);
 	if constexpr(can_convert)
 	{
-		size_t l;
+		size_t l = 0;
 		for(l = 0; arg[l]; l++ )
 			s.w(arg[l]);
 	}
@@ -695,11 +693,11 @@ forceinline static inline void ConvertS(Buf &s, Arg arg)
 
 // single char
 template<typename Buf, class Arg>
-forceinline static inline void ConvertC(Buf &s, Arg arg)
+forceinline constexpr static inline void ConvertC(Buf &s, Arg arg)
 {
 	OverloadCheck(can_convert, &arg, (const char)(*x));
 	if constexpr(can_convert)
-			s.w((const char)arg);
+		s.w((const char)arg);
 	else
 		s.w(__PRETTY_FUNCTION__, sizeof(__PRETTY_FUNCTION__));
 }
@@ -761,17 +759,17 @@ struct BakedFlags {
 				break;
 			// flags
 			case '+':
-			   sign = '+';
-			   skip = true;
-			   break;
+				sign = '+';
+				skip = true;
+				break;
 			case '0':
-			   lead = '0';
-			   skip = true;
+				lead = '0';
+				skip = true;
 				break;
 			case ' ':
-			   lead = ' ';
-			   skip = true;
-			   break;
+				lead = ' ';
+				skip = true;
+				break;
 
 			case '#':
 			case '-':
@@ -791,15 +789,15 @@ struct BakedFlags {
 
 	unsigned int arr[256];
 #else
-// left just for checking if constexpr affecting compile time
+	// left just for checking if constexpr affecting compile time
 	unsigned int arr[256] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2097168, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 11024, 0, 16, 0, 0, 3145744, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 6, 5, 7, 0, 0, 0, 0, 0, 0, 0, 3, 4, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 1, 8, 6, 5, 7, 16, 8, 16, 0, 16, 0, 0, 3, 4, 0, 0, 0, 16, 9, 0, 0, 4, 0, 16, 0, 0, 0, 0};
 #endif
 };
 
 template<typename Buf, class Arg, size_t fmtlen>
-static inline forceinline size_t PrintArgument(Buf &s, size_t p1, const char (&fmt)[fmtlen], const Arg &arg)
+static inline forceinline constexpr size_t PrintArgument(Buf &s, size_t p1, const char (&fmt)[fmtlen], const Arg &arg)
 {
-	size_t p;
+	size_t p = 0;
 	constexpr const BakedFlags baked_flags = BakedFlags();
 #pragma GCC unroll 128
 	for(p = p1; p < fmtlen; p++ )
@@ -812,11 +810,11 @@ static inline forceinline size_t PrintArgument(Buf &s, size_t p1, const char (&f
 		{
 			// branchless flag reading
 #define UNPACK_NEXT_CHAR \
-	f &= ~(1U << 4); \
-	f |= baked_flags.arr[(unsigned char)fmt[p+off+1]]; \
-	off += (f & (1U << 4)) >> 4
+			f &= ~(1U << 4); \
+				f |= baked_flags.arr[(unsigned char)fmt[p+off+1]]; \
+				off += (f & (1U << 4)) >> 4
 
-			unsigned int f = baked_flags.arr[(unsigned char)fmt[p+1]];
+				   unsigned int f = baked_flags.arr[(unsigned char)fmt[p+1]];
 			size_t off = (f & (1U << 4)) >> 4;
 			size_t fw = 0;
 			int pr = -1;
@@ -826,8 +824,8 @@ static inline forceinline size_t PrintArgument(Buf &s, size_t p1, const char (&f
 
 			// field width
 			while ((fmt[p+off+1] >= '0') && (fmt[p+off+1] <= '9')) {
-			   fw = fw * 10 + fmt[p+off+1] - '0';
-			   off++;
+				fw = fw * 10 + fmt[p+off+1] - '0';
+				off++;
 			}
 
 			// precision, up to 100 digits
@@ -905,7 +903,7 @@ static inline forceinline size_t PrintArgument(Buf &s, size_t p1, const char (&f
 }
 
 // arguments unfolding
-template<typename Buf, size_t fmtlen,  typename Arg> forceinline inline void SPrint_impl(Buf &s, size_t p, char const (&fmt)[fmtlen], const Arg& arg)
+template<typename Buf, size_t fmtlen,  typename Arg> forceinline constexpr  inline void SPrint_impl(Buf &s, size_t p, char const (&fmt)[fmtlen], const Arg& arg)
 {
 	size_t ss = PrintArgument(s, p,  fmt,arg);
 	// copy trailing format chars or '%''s for missing args
@@ -913,14 +911,14 @@ template<typename Buf, size_t fmtlen,  typename Arg> forceinline inline void SPr
 		s.w(fmt[ss++]);
 }
 
-template<typename Buf, size_t fmtlen> forceinline inline void SPrint_impl(Buf &s, size_t p, char const (&fmt)[fmtlen])
+template<typename Buf, size_t fmtlen> forceinline constexpr inline void SPrint_impl(Buf &s, size_t p, char const (&fmt)[fmtlen])
 {
 	size_t ss = 0;
 	while(ss<fmtlen)
 		s.w(fmt[ss++]);
 }
 
-template<typename Buf, size_t fmtlen, typename Arg, typename ... Args> forceinline inline void SPrint_impl(Buf &s, size_t p, char const (&fmt)[fmtlen], const Arg& arg, const Args& ... args)
+template<typename Buf, size_t fmtlen, typename Arg, typename ... Args> forceinline constexpr inline void SPrint_impl(Buf &s, size_t p, char const (&fmt)[fmtlen], const Arg& arg, const Args& ... args)
 {
 	size_t ss = PrintArgument(s, p, fmt,arg);
 	SPrint_impl(s, ss, fmt, args...);
@@ -928,20 +926,20 @@ template<typename Buf, size_t fmtlen, typename Arg, typename ... Args> forceinli
 
 // interface
 ///TODO: hide under namespace or change naming
-template<size_t fmtlen, size_t buflen, typename ... Args> forceinline inline int SBPrint(char (&buf)[buflen], char const (&fmt)[fmtlen], const Args& ... args)
+template<size_t fmtlen, size_t buflen, typename ... Args> forceinline constexpr inline int SBPrint(char (&buf)[buflen], char const (&fmt)[fmtlen], const Args& ... args)
 {
 	FixedOutputBuffer<buflen> s{buf};
 	SPrint_impl(s, 0, fmt, args...);
 	return s.buf - buf;
 }
-
+#if 0
 template<size_t fmtlen, typename ... Args> forceinline inline int SNPrint(char *buf, size_t len, char const (&fmt)[fmtlen], const Args& ... args)
 {
 	OutputBuffer s{buf, &buf[len]};
 	SPrint_impl(s, 0, fmt, args...);
 	return s.buf - buf;
 }
-
+#endif
 #ifdef FMT_ENABLE_STDIO
 #include<stdio.h>
 template<size_t fmtlen, typename ... Args> forceinline inline int FPrint(FILE *f, char const (&fmt)[fmtlen], const Args& ... args)
