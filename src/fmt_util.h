@@ -16,6 +16,7 @@ If unrolls fails, code may blow-up to megabytes
 so enabling compiler optimization is very recommended
 */
 
+#include <stddef.h>
 #ifdef __GNUC__
 #define likely(x)       __builtin_expect(!!(x),1)
 #define unlikely(x)     __builtin_expect(!!(x),0)
@@ -35,7 +36,7 @@ so enabling compiler optimization is very recommended
 #define stbsp__int64 signed long long
 #define stbsp__uint16 unsigned short
 
-#if __has_builtin(__builtin_bit_cast)
+#if (_MSC_VER > 1926) || (__GNUC__ >= 10) || (__clang_major__ >= 9)
 template<typename A, typename B>constexpr void STBSP__COPYFP(B &dest, const A&src) {dest = __builtin_bit_cast(B, src);}
 #define CONSTREAL constexpr
 #else
@@ -214,21 +215,88 @@ struct TenPowers
 		}
 	}
 };
+constexpr TenPowers tenPowers;
 
-#if __has_builtin(__builtin_clzll)
+// Type traits
+
+template<class A, class B>
+struct CompareTypes_w {
+	constexpr static bool res  = false;
+};
+
+template<class T>
+struct CompareTypes_w<T, T>{
+	constexpr static bool res  = true;
+};
+
+// if constexpr(CompareTypes(T,int)) { ... }
+#define CompareTypes(A,B) (CompareTypes_w<A,B>::res)
+
+// OverloadSet utility
+template<class... Fs> struct FunctionOverloadSet{};
+
+template<class F0, class...Fs>
+struct FunctionOverloadSet<F0, Fs...> : F0, FunctionOverloadSet<Fs...>
+{
+	constexpr FunctionOverloadSet(F0 f0, Fs... fs) : F0(f0), FunctionOverloadSet<Fs...>(fs...){}
+	using F0::operator();
+	using FunctionOverloadSet<Fs...>::operator();
+};
+
+template<class F>struct FunctionOverloadSet<F> : F
+{
+	constexpr FunctionOverloadSet(F f) :F(f){};
+	using F::operator();
+};
+template<class...Fs> constexpr FunctionOverloadSet<Fs...> FunctionOverload(Fs... fs)
+{
+	return {fs...};
+}
+
+// OverloadCheck(can_call, &ptr, x->Method(x))
+// OverloadCheck(can_cast, &ptr, (type)x)
+// if constexpr(can_cast && can_call) { ... }
+// can be combined to single expression in clang, but gcc8 fails with lambda in unelevated context
+#define OverloadCheck(result,pointer,expr) \
+constexpr auto _gL_##result = FunctionOverload(\
+											   [](auto&& x) -> decltype(expr, 1U) {return{};}, \
+											   [](...)      -> char { return {}; } \
+	);constexpr auto result = sizeof(decltype(_gL_##result(pointer))) == 4;
+
+#if __GNUC__
+#define IsConstEval(x) __builtin_constant_p)
+#else
+constexpr bool IsConstEval_() noexcept {
+	struct C {};struct M : C { int a; };struct N : C { int a; };
+	return &M::a != static_cast<int C::*>(&N::a);
+}
+#define IsConstEval(x) IsConstEval_()
+#endif
+
+
+#if (_MSC_VER > 1926) || __GNUC__
 #define CONSTZLL constexpr
 #else
 #define CONSTZLL
 #endif
-
-constexpr TenPowers tenPowers;
 forceinline CONSTZLL static inline size_t GetMsb(unsigned long long n)
 {
-#if __has_builtin(__builtin_clzll)
+#if __GNUC__
 	return __builtin_clzll(n) ^ 0x3F;
+#elif (_MSC_VER > 1926)
+	return (__builtin_bit_cast(unsigned long long, (double)n) >> 52) - 1023;
 #else
-	double ff = (double)n;
-	return ((*(1+(unsigned int *)&ff))>>20)-1023;
+	if constexpr(IsConstEval(n))
+	{
+		size_t r = 0;
+		while(n)n >>= 1, r++;
+		return r;
+	}
+	else
+	{
+		double ff = (double)n;
+		return ((*(1+(unsigned int *)&ff))>>20)-1023;
+	}
 #endif
 }
 
@@ -315,55 +383,8 @@ CONSTREAL static inline unsigned long long RealToU64(int *decimal_pos, double d,
 	*decimal_pos = tens;
 	return bits;
 }
-
 #undef stbsp__ddtoS64
 #undef STBSP__COPYFP
-
-// Type traits
-
-template<class A, class B>
-struct CompareTypes_w {
-	constexpr static bool res  = false;
-};
-
-template<class T>
-struct CompareTypes_w<T, T>{
-	constexpr static bool res  = true;
-};
-
-// if constexpr(CompareTypes(T,int)) { ... }
-#define CompareTypes(A,B) (CompareTypes_w<A,B>::res)
-
-// OverloadSet utility
-template<class... Fs> struct FunctionOverloadSet{};
-
-template<class F0, class...Fs>
-struct FunctionOverloadSet<F0, Fs...> : F0, FunctionOverloadSet<Fs...>
-{
-	constexpr FunctionOverloadSet(F0 f0, Fs... fs) : F0(f0), FunctionOverloadSet<Fs...>(fs...){}
-	using F0::operator();
-	using FunctionOverloadSet<Fs...>::operator();
-};
-
-template<class F>struct FunctionOverloadSet<F> : F
-{
-	constexpr FunctionOverloadSet(F f) :F(f){};
-	using F::operator();
-};
-template<class...Fs> constexpr FunctionOverloadSet<Fs...> FunctionOverload(Fs... fs)
-{
-	return {fs...};
-}
-
-// OverloadCheck(can_call, &ptr, x->Method(x))
-// OverloadCheck(can_cast, &ptr, (type)x)
-// if constexpr(can_cast && can_call) { ... }
-// can be combined to single expression in clang, but gcc8 fails with lambda in unelevated context
-#define OverloadCheck(result,pointer,expr) \
-constexpr auto _gL_##result = FunctionOverload(\
-											   [](auto&& x) -> decltype(expr, 1U) {return{};}, \
-											   [](...)      -> char { return {}; } \
-	);constexpr auto result = sizeof(decltype(_gL_##result(pointer))) == 4;
 
 // all supported format specifiers
 enum Formats {
