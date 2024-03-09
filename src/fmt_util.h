@@ -37,9 +37,11 @@ so enabling compiler optimization is very recommended
 #define stbsp__uint16 unsigned short
 
 #if (_MSC_VER > 1926) || (__GNUC__ >= 10) || (__clang_major__ >= 9)
-template<typename A, typename B>constexpr void STBSP__COPYFP(B &dest, const A&src) {dest = __builtin_bit_cast(B, src);}
+#define  STBSP__COPYFP(dest,src) dest = __builtin_bit_cast(decltype(dest), src)
 #define CONSTREAL constexpr
+#define RealToU64Inline RealToU64
 #else
+#define RealToU64Inline RealToU64LegacyConstexpr
 #define STBSP__COPYFP(dest, src) *(stbsp__uint64*)&dest = *(stbsp__uint64*)&src
 #define CONSTREAL
 #endif
@@ -263,30 +265,24 @@ constexpr auto _gL_##result = FunctionOverload(\
 											   [](...)      -> char { return {}; } \
 	);constexpr auto result = sizeof(decltype(_gL_##result(pointer))) == 4;
 
-#if __GNUC__
-#define IsConstEval(x) __builtin_constant_p)
+#if __clang__ && (__clang_major__ < 9)
+#warning "Old clang cannot check for consteval"
+#define IsConstEval(x) 1 //  Switch this to 0 if need effective runtime floats, 1 if need working constexpr
+#elif __GNUC__
+#define IsConstEval(x) __builtin_constant_p(x)
 #else
-constexpr bool IsConstEval_() noexcept {
-	struct C {};struct M : C { int a; };struct N : C { int a; };
-	return &M::a != static_cast<int C::*>(&N::a);
-}
+constexpr bool IsConstEval_() noexcept {struct C {};struct M : C { int a; };struct N : C { int a; };return &M::a != static_cast<int C::*>(&N::a);}
 #define IsConstEval(x) IsConstEval_()
 #endif
 
-
-#if (_MSC_VER > 1926) || __GNUC__
-#define CONSTZLL constexpr
-#else
-#define CONSTZLL
-#endif
-forceinline CONSTZLL static inline size_t GetMsb(unsigned long long n)
+forceinline constexpr static inline size_t GetMsb(unsigned long long n)
 {
 #if __GNUC__
 	return __builtin_clzll(n) ^ 0x3F;
 #elif (_MSC_VER > 1926)
 	return (__builtin_bit_cast(unsigned long long, (double)n) >> 52) - 1023;
 #else
-	if constexpr(IsConstEval(n))
+	if(IsConstEval(n))
 	{
 		size_t r = 0;
 		while(n)n >>= 1, r++;
@@ -300,11 +296,42 @@ forceinline CONSTZLL static inline size_t GetMsb(unsigned long long n)
 #endif
 }
 
-constexpr static stbsp__uint64 const stbsp__tento19th = 1000000000000000000ULL;
-CONSTREAL static inline unsigned long long RealToU64(int *decimal_pos, double d, unsigned int frac_digits)
+constexpr forceinline unsigned long long RoundU64(int *decimal_pos, unsigned long long bits, unsigned int frac_digits, int tens)
+{
+	int e = 0;
+	// now do the rounding in integer land
+	frac_digits = (frac_digits & 0x80000000) ? ((frac_digits & 0x7ffffff) + 1) : (tens + frac_digits);
+	if(likely(frac_digits < 24)) {
+		stbsp__uint32 dg = tenPowers.rev[GetMsb(bits|1)] + (bits >= tenPowers.pow[tenPowers.rev[GetMsb(bits|1)]]);
+
+		if(likely((frac_digits < dg) && (dg != 20))) {
+			stbsp__uint64 r = 0;
+			// add 0.5 at the right position and round
+			e = dg - frac_digits;
+			if ((stbsp__uint32)e < 24)
+			{
+				r = tenPowers.pow[e];
+				bits = bits + (r / 2);
+				if ((stbsp__uint64)bits >= tenPowers.pow[dg])
+					++tens;
+				bits /= r;
+			}
+		}
+	}
+
+	// kill long trailing runs of zeros
+	while(!(bits % 1000))
+		bits /= 1000;
+
+	*decimal_pos = tens;
+	return bits;
+}
+
+#define f_stbsp__tento19th 1000000000000000000ULL
+forceinline CONSTREAL static inline unsigned long long RealToU64(int *decimal_pos, double d, unsigned int frac_digits)
 {
 	stbsp__int64 bits = 0;
-	stbsp__int32 expo = 0, e = 0, tens = 0;
+	stbsp__int32 expo = 0, tens = 0;
 
 	STBSP__COPYFP(bits, d);
 	expo = (stbsp__int32)((bits >> 52) & 2047);
@@ -347,42 +374,49 @@ CONSTREAL static inline unsigned long long RealToU64(int *decimal_pos, double d,
 		stbsp__ddtoS64(bits, ph, pl);
 
 		// check if we undershot
-		if (((stbsp__uint64)bits) >= stbsp__tento19th)
+		if (((stbsp__uint64)bits) >= f_stbsp__tento19th)
 			++tens;
 	}
 
-	// now do the rounding in integer land
-	frac_digits = (frac_digits & 0x80000000) ? ((frac_digits & 0x7ffffff) + 1) : (tens + frac_digits);
-	if ((frac_digits < 24)) {
-		stbsp__uint32 dg = 1;
-		if ((stbsp__uint64)bits >= tenPowers.pow[9])
-			dg = 10;
-#pragma GCC unroll 128
-		for( int i = dg; i < 20; i++)
-			dg += (stbsp__uint64)bits >= tenPowers.pow[i];
+	return RoundU64(decimal_pos, bits, frac_digits, tens);
+}
 
-		if (frac_digits < dg || dg == 20) {
-			stbsp__uint64 r = 0;
-			// add 0.5 at the right position and round
-			e = dg - frac_digits;
-			if ((stbsp__uint32)e < 24)
-			{
-				r = tenPowers.pow[e];
-				bits = bits + (r / 2);
-				if ((stbsp__uint64)bits >= tenPowers.pow[dg])
-					++tens;
-				bits /= r;
-			}
-		}
+forceinline constexpr static inline unsigned long long RealToU64LegacyConstexpr(int *decimal_pos, double d, unsigned int frac_digits)
+{
+	stbsp__int64 bits = 0;
+	stbsp__int32 tens = 0;
+
+	if(d != d) // nan
+	{
+		*decimal_pos = 0x7000;
+		return 1;
+	}
+	if(d >= 1.795e+308) // inf
+	{
+		*decimal_pos = 0x7000;
+		return 0;
+	}
+	if(d == 0.0)
+	{
+		*decimal_pos = 1;
+		return 0;
 	}
 
-	// kill long trailing runs of zeros
-	while(!(bits % 1000))
-		bits /= 1000;
+	while( d >= 10.0 )
+		d /= 10.0, tens++;
+	while( d < 1.0 )
+		d *= 10.0, tens--;
+	bits = d * tenPowers.pow[17];
+	tens ++;
 
-	*decimal_pos = tens;
-	return bits;
+	return RoundU64(decimal_pos, bits, frac_digits, tens);
 }
+
+CONSTREAL static unsigned long long RealToU64Noinline(int *decimal_pos, double d, unsigned int frac_digits)
+{
+	return RealToU64(decimal_pos, d, frac_digits);
+}
+
 #undef stbsp__ddtoS64
 #undef STBSP__COPYFP
 
@@ -426,7 +460,7 @@ template <size_t blen> struct FixedOutputBuffer
 
 };
 // Format wrappers
-
+constexpr static const char f_hex[] = "0123456789abcdef0123456789ABCDEF";
 // octal, hex or binary
 template<unsigned int bits,typename Buf, class Arg>
 forceinline constexpr static inline void ConvertH(Buf &s, Arg arg, char fmtc, size_t fw, char lead)
@@ -435,7 +469,7 @@ forceinline constexpr static inline void ConvertH(Buf &s, Arg arg, char fmtc, si
 	if constexpr(can_convert)
 	{
 		// allow uppercase by setting 0x10 (1<<4) bit
-		constexpr const char hex[] = "0123456789abcdef0123456789ABCDEF";
+
 		unsigned long long n = (unsigned long long)arg;
 		unsigned int chars = (GetMsb(n|1))/ bits + 1;
 		if(fw < chars)
@@ -446,7 +480,7 @@ forceinline constexpr static inline void ConvertH(Buf &s, Arg arg, char fmtc, si
 			fw++;
 
 		while(fw)
-			s.w(hex[(n >> bits *--fw)& ((1 << bits) - 1) | (fmtc == 'X') << 4]);
+			s.w(f_hex[(n >> bits *--fw)& ((1 << bits) - 1) | (fmtc == 'X') << 4]);
 	}
 	else
 		s.w(__PRETTY_FUNCTION__, sizeof(__PRETTY_FUNCTION__));
@@ -526,7 +560,7 @@ forceinline constexpr static inline void ConvertF(Buf &s, Arg arg, int fw, int p
 			if(pr <0)
 				pr = 6;
 
-			if(pr == 6 && fw <= 0 && d > 0.00001 && d < 999999.0 )
+			if(pr == 6 && fw <= 0 && d > 0.00001 && d < 999999.0)
 			{
 				unsigned long long low1= (d * 1000000.0);
 				unsigned int low = low1 % 1000000;
@@ -540,6 +574,7 @@ forceinline constexpr static inline void ConvertF(Buf &s, Arg arg, int fw, int p
 					s.w('0' + (high / i) % 10);
 					i /= 10;
 				}
+
 				if(low)
 				{
 					s.w('.');
@@ -555,7 +590,11 @@ forceinline constexpr static inline void ConvertF(Buf &s, Arg arg, int fw, int p
 			}
 			else
 			{
-				unsigned long long num = RealToU64(&dp, d, pr);
+				unsigned long long num = 0;
+				if(IsConstEval(arg))
+					num = RealToU64Inline(&dp, d, pr);
+				else
+					num = RealToU64Noinline(&dp, d, pr);
 				if(dp == 0x7000)
 				{
 					s.w(num? "nan" : "inf", 3);
@@ -577,7 +616,10 @@ forceinline constexpr static inline void ConvertF(Buf &s, Arg arg, int fw, int p
 				if(sign)
 					s.w(sign);
 				if(digits_vis > s.left)
-					dp_vis -= digits_vis - s.left, l -= digits_vis - s.left;
+				{
+					s.w('$');
+					return;
+				}
 				s.buf += digits_vis;
 				while(i+1 < dp_vis)WRITE_PAIRS;
 				if(i < dp_vis)
@@ -598,6 +640,7 @@ forceinline constexpr static inline void ConvertF(Buf &s, Arg arg, int fw, int p
 					*--s.buf = num%10 + '0',num/=10,i++;
 				s.buf += i+1,s.left -= i+1;
 			}
+
 		}
 		else // exclude integer types during template unfolding
 			ConvertI(s,arg,0,fw,lead,sign);
@@ -627,7 +670,11 @@ forceinline constexpr static inline void ConvertE(Buf &s, Arg arg, int fw, int p
 			else
 				d = arg;
 
-			unsigned long long num = RealToU64(&dp, d, pr);
+			unsigned long long num = 0;
+			if(IsConstEval(arg))
+				num = RealToU64Inline(&dp, d, pr);
+			else
+				num = RealToU64Noinline(&dp, d, pr);
 			if(dp == 0x7000)
 			{
 				s.w(num? "nan" : "inf", 3);
