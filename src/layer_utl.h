@@ -89,6 +89,34 @@ struct GrowArray
 	}
 };
 
+template<typename Key>
+forceinline static inline bool KeyCompare(const Key &a, const Key &b)
+{
+	return a == b;
+}
+template<>
+inline bool KeyCompare(const char * const &a, const char * const &b)
+{
+	return !strcmp(a,b);
+}
+
+template<size_t TblSize, typename Key>
+forceinline static inline size_t HashFunc(const Key &key)
+{
+	// handle hash: handle pointers usually aligned
+	return (((size_t) key) >> 8)  & (TblSize - 1);
+}
+
+template<size_t TblSize>
+forceinline static inline size_t HashFunc(const char * const &key)
+{
+	size_t hash = 7;
+	unsigned char c;
+	const unsigned char *s = (const unsigned char*)key;
+	while((c = *s++))
+		hash = hash * 31 + c;
+	return hash & (TblSize - 1);
+}
 
 template <typename Key, typename Value, size_t TblPower = 2>
 struct HashMap {
@@ -129,21 +157,14 @@ struct HashMap {
 		}
 	}
 
-	size_t HashFunc(const Key &key) const
-	{
-		/// TODO: string hash?
-		// handle hash: handle pointers usually aligned
-		return (((size_t) key) >> 8)  & (TblSize - 1);
-	}
-
 	// just in case: check existance or constant access
 	forceinline Value *GetPtr(const Key &key) const
 	{
-		size_t hashValue = HashFunc(key);
+		size_t hashValue = HashFunc<TblSize>(key);
 		Node *entry = table[hashValue];
 		while(likely(entry))
 		{
-			if(entry->k == key)
+			if(KeyCompare(entry->k, key))
 				return &entry->v;
 			entry = entry->n;
 		}
@@ -156,11 +177,11 @@ struct HashMap {
 	}
 
 #define HASHFIND(key) \
-		size_t hashValue = HashFunc(key); \
+		size_t hashValue = HashFunc<TblSize>(key); \
 		Node *prev = NULL; \
 		Node *entry = table[hashValue]; \
 	\
-		while(entry && entry->k != key) \
+		while(entry && !KeyCompare(entry->k, key)) \
 		{ \
 			prev = entry; \
 			entry = entry->n; \
@@ -234,21 +255,14 @@ struct HashArrayMap {
 	~HashArrayMap() {
 	}
 
-	size_t HashFunc(const Key &key) const
-	{
-		/// TODO: string hash?
-		// handle hash: handle pointers usually aligned
-		return (((size_t) key) >> 8)  & (TblSize - 1);
-	}
-
 	// just in case: check existance or constant access
 	Value *GetPtr(const Key &key) const
 	{
-		size_t hashValue = HashFunc(key);
+		size_t hashValue = HashFunc<TblSize>(key);
 		const GrowArray<Node> &entry = table[hashValue];
 		for(int i = 0; i < entry.count; i++)
 		{
-			if(entry[i].k == key)
+			if( KeyCompare(entry[i].k, key))
 				return &entry[i].v;
 		}
 		return nullptr;
@@ -260,10 +274,10 @@ struct HashArrayMap {
 	}
 
 #define HASHFIND(key) \
-	GrowArray<Node> &entry = table[HashFunc(key)]; \
+	GrowArray<Node> &entry = table[HashFunc<TblSize>(key)]; \
 	int i; \
 	for(i = 0; i < entry.count; i++) \
-		if( entry[i].k == key ) \
+		if( KeyCompare(entry[i].k, key)) \
 			break;
 
 	Value& GetOrAllocate(const Key &key)
