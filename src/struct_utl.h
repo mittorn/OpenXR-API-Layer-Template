@@ -84,7 +84,7 @@ template <typename T, typename V, typename Seq = ISeq<>, typename = void>
 struct ConstructorVisiotor : Seq {
 
 	constexpr static int size = 0;
-	T fill(V v, int s){ return T();}
+	T Fill(V v, int s){ return T();}
 };
 
 template <typename T, typename V, int... Indices>
@@ -94,14 +94,18 @@ struct ConstructorVisiotor<
 	>
 	: ConstructorVisiotor<T, V, ISeq<Indices..., sizeof...(Indices)>>
 {
-	using base = ConstructorVisiotor<T,V,ISeq<Indices..., sizeof...(Indices)>>;
-	constexpr static int size = 1 + base::size;
+	using Base = ConstructorVisiotor<T,V,ISeq<Indices..., sizeof...(Indices)>>;
+	constexpr static int size = 1 + Base::size;
 
-	T fill(V v, int s = size)
+	T Fill(V v, int s = size)
 	{
 		if(sizeof...(Indices) == s - 1)
-			return T{(v.setindex(Indices),v)...,(v.setindex(s - 1),v)};
-		return base::fill(v,s);
+		{
+			T r = T{(v.SetIndex(Indices),v)...,(v.SetIndex(s - 1),v)};
+			v.End(sizeof(T));
+			return r;
+		}
+		return Base::Fill(v,s);
 	}
 };
 
@@ -118,8 +122,42 @@ struct GenericReflect
 	char *base;
 	size_t off = 0;
 	int index =-1;
-	void setindex(int idx){
+	char buffer[256] = "";
+	size_t len = 0;
+	char buffer_chars[256] = "";
+	size_t chars_len = 0;
+	size_t body_begin = 0;
+	size_t zeroes_len = 0;
+	const char *(*last_typename)() = nullptr;
+	void SetIndex(int idx){
 		index = idx;
+	}
+	//template<typename T>
+	void Flush(const char *type, size_t off, size_t size)
+	{
+		if(chars_len)
+		{
+			snprintf(&buffer[body_begin], 256 - len, "%s", buffer_chars);
+			len = body_begin = strlen(buffer);
+		}
+		chars_len = 0;
+		if(zeroes_len)
+		{
+			snprintf(&buffer[body_begin], 256 - len, "(%d zeroes) ", (int)zeroes_len);
+			len = body_begin = strlen(buffer);
+		}
+		zeroes_len = 0;
+		if(len)
+			puts(buffer);
+		snprintf(buffer, 256, "%s %d %d %d ", type, index, (int)off, (int)size);
+		len = body_begin = strlen(buffer);
+	}
+	void End(size_t size)
+	{
+		puts(buffer);
+		if(off != size)
+			printf("Size mismatch! %d %d\n", (int)off, (int)size);
+		len = 0;
 	}
 	template<typename T>
 	operator T()
@@ -137,19 +175,62 @@ struct GenericReflect
 		OverloadCheck(is_constructible, (T*)0,*x = T());
 		constexpr bool is_void_pointer = CompareTypes(T*, void**) || CompareTypes(T*, const void**);
 
-		printf(" %s %d %d %d %d %d %d %d %d\n", TypeName<T>(),(int)off, (int)sizeof(T), index, is_numeric, is_pointer,is_uniform_constructible2, is_array_subscriptable, is_zero_addable);
+		//printf(" %s %d %d %d %d %d %d %d %d\n", TypeName<T>(),(int)off, (int)sizeof(T), index, is_numeric, is_pointer,is_uniform_constructible2, is_array_subscriptable, is_zero_addable);
+		if(last_typename != &TypeName<T>)
+			Flush(TypeName<T>(),(int)off, (int)sizeof(T));
+
 
 		if constexpr(is_constructible && !is_void_pointer && !is_zero_addable && !is_array_subscriptable && !is_pointer && !is_numeric)
 		{
 			OverloadCheck(is_pointer_castable, (T*)0,(char*)(void*)(*x));
 			if constexpr(!is_pointer_castable)
+			{
+				if(last_typename == &TypeName<T>)
+					Flush(TypeName<T>(),(int)off, (int)sizeof(T));
 				DumpGenericStruct((T*)(base + off));
+			}
 		}
-		else if constexpr(is_numeric)
-			printf("%f\n", (float)*(T*)(base + off));
+		else if constexpr(is_numeric && !is_pointer && !is_void_pointer)
+		{
+			if constexpr(sizeof(T) == 1)
+			{
+				const unsigned char c = *(const unsigned char*)(base + off);
+				if(c == 0)
+				{
+					if(chars_len)
+						Flush(TypeName<T>(),(int)off, (int)sizeof(T));
+					zeroes_len++;
+				}
+				else if(c >= 32)
+				{
+					if(zeroes_len)
+						Flush(TypeName<T>(),(int)off, (int)sizeof(T));
+					if(chars_len < 255)
+						buffer_chars[chars_len++] = c;
+				}
+				else if(chars_len || zeroes_len)
+				{
+					Flush(TypeName<T>(),(int)off, (int)sizeof(T));
+				}
+				else
+					snprintf(&buffer[len], 256 - len, "%02X ", c);
+			}
+			else if constexpr(((T)0.1f) != (T)0.0f)
+			{
+				snprintf(&buffer[len], 256 - len, "%f ", (double)*(T*)(base + off));
+			}
+			else
+				snprintf(&buffer[len], 256 - len, "%lld ", (long long)*(T*)(base + off));
+			len = strlen(buffer);
+			//printf("%f\n", (float)*(T*)(base + off));
+		}
 		else if constexpr(is_pointer || is_void_pointer)
-			printf("%p\n", (void*)*(T*)(base + off));
-
+		{
+			//printf("%p\n", (void*)*(T*)(base + off));
+			snprintf(&buffer[len], 256 - len, "%p ", (void*)*(T*)(base + off));
+			len = strlen(buffer);
+		}
+		last_typename = TypeName<T>;
 		off += sizeof(T);
 		return T();
 	}
@@ -162,7 +243,7 @@ void DumpGenericStruct(T *data)
 	printf("struct %s {\n", TypeName<T>());
 	GenericReflect t;
 	t.base = (char*)data;
-	ConstructorVisiotor<T, GenericReflect>().fill(t);
+	ConstructorVisiotor<T, GenericReflect>().Fill(t);
 	printf("}\n");
 }
 
