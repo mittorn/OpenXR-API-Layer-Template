@@ -287,3 +287,36 @@ struct HashArrayMap {
 	}
 #undef HASHFIND
 };
+
+template <typename T, size_t Bits = 6>
+struct CycleArray
+{
+	constexpr static size_t size = 1U << Bits;
+	constexpr static size_t mask = (1U << Bits) - 1;
+	T storage[size];
+	forceinline inline T &operator[](size_t idx)
+	{
+		return storage[idx & mask];
+	}
+};
+
+template<typename T, size_t Bits = 6>
+struct CycleQueue
+{
+	CycleArray<T,Bits> array;
+	size_t in = 0, out = 0;
+	forceinline bool Enqueue(const T& el)
+	{
+		if(in - out > array.size)
+			return false;
+		array[in++] = el;
+		return true;
+	}
+	forceinline bool Dequeue(T &o)
+	{
+		if(likely(out == in))
+			return false;
+		o = array[out++];
+		return true;
+	}
+};

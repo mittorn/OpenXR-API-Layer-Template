@@ -14,14 +14,99 @@
 #include "layer_utl.h"
 #define FMT_ENABLE_STDIO
 #include "fmt_util.h"
-
+#include "thread_utl.h"
+#include "struct_utl.h"
+#include <unistd.h>
 #define Log(...) FPrint(stderr, __VA_ARGS__)
 
 //Define next function pointer
 #define DECLARE_NEXT_FUNC(x) PFN_##x nextLayer_##x
 //Load next function pointer
 #define LOAD_NEXT_FUNC(x) nextLayer_xrGetInstanceProcAddr(mInstance, #x, (PFN_xrVoidFunction*)&nextLayer_##x)
+enum EventType{
+	EVENT_NULL,
+	EVENT_POLL_INTERACTION_PROFILE_CHANGED,
+	EVENT_POLL_RELOAD_CONFIG,
+	EVENT_ACTION_BOOL,
+};
 
+
+union PollEvent{
+	EventType type;
+	struct InteractionProfileChanged
+	{
+		EventType type = EVENT_POLL_INTERACTION_PROFILE_CHANGED;
+	};
+};
+
+struct EventPoller
+{
+	Thread pollerThread = Thread([](void *poller){
+		EventPoller *p = (EventPoller*)poller;
+		p->Run();
+	});
+	CycleQueue<PollEvent> pollEvents;
+	SpinLock pollLock;
+	int fd = -1;
+	bool InitSocket()
+	{
+		return false;
+	}
+	void Run()
+	{
+	}
+	volatile bool Running = false;
+	void Start()
+	{
+		if(!InitSocket())
+			return;
+		Running = true;
+		SyncBarrier();
+		pollerThread.Start();
+	}
+	void Stop()
+	{
+		Running = false;
+		SyncBarrier();
+		pollerThread.RequestStop();
+	}
+};
+
+
+
+struct ConfigLoader
+{
+	void setindex(int idx){}
+};
+
+template <typename T, const auto &NAME>
+struct Option_
+{
+	constexpr static const char *name = NAME;
+	T val;
+	operator T() const
+	{
+		return val;
+	}
+	Option_(){}
+	Option_(const ConfigLoader &l){}
+	Option_(ConfigLoader &l){}
+};
+#define Option(type,name) \
+	constexpr static const char *opt_name_##name = #name; \
+	Option_<type, opt_name_##name> name
+
+
+struct Config
+{
+	Option(int, serverPort);
+};
+
+static Config LoadConfig()
+{
+	ConfigLoader t;
+	return ConstructorVisiotor<Config, ConfigLoader>().fill(t);
+}
 
 struct Layer
 {
@@ -33,6 +118,7 @@ struct Layer
 	// Only handle this XrInatance in this object
 	XrInstance mInstance = XR_NULL_HANDLE;
 	XrSession mActiveSession = XR_NULL_HANDLE;
+	EventPoller poller;
 
 	// Extensions list
 	const char **mExtensions;
@@ -210,6 +296,7 @@ struct Layer
 		mExtensionsCount = extcount;
 		for(int i = 0; i < USER_INVALID; i++)
 			nextLayer_xrStringToPath(inst, mszUserPaths[i], &mUserPaths[i]);
+		poller.Start();
 	}
 
 	// Only need this if extensions used
@@ -565,7 +652,6 @@ struct Layer
 					DumpActionSet(mActiveSession, w->mActionSets[i]);
 			}
 		}
-
 		return res;
 	}
 
@@ -578,6 +664,7 @@ struct Layer
 		mExtensionsCount = 0;
 		delete[] mExtensions;
 		mExtensions = nullptr;
+		poller.Stop();
 		return nextLayer_xrDestroyInstance(instance);
 	}
 
