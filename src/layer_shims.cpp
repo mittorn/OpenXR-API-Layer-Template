@@ -76,7 +76,8 @@ struct EventPoller
 
 struct ConfigLoader
 {
-	void setindex(int idx){}
+	void SetIndex(int idx){}
+	void End(size_t size){}
 };
 
 template <typename T, const auto &NAME>
@@ -105,7 +106,7 @@ struct Config
 static Config LoadConfig()
 {
 	ConfigLoader t;
-	return ConstructorVisiotor<Config, ConfigLoader>().fill(t);
+	return ConstructorVisiotor<Config, ConfigLoader>().Fill(t);
 }
 
 struct Layer
