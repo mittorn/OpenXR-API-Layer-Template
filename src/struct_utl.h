@@ -7,20 +7,31 @@
 template <typename T>
 const auto &RawTypeName()
 {
-	   #ifdef _MSC_VER
-	   return __FUNCSIG__;
-	   #else
-	   return __PRETTY_FUNCTION__;
-	   #endif
+#ifdef _MSC_VER
+	return __FUNCSIG__;
+#else
+	return __PRETTY_FUNCTION__;
+#endif
+}
+
+template <typename E, E v>
+const auto &RawEnumName()
+{
+#ifdef _MSC_VER
+	return __FUNCSIG__;
+#else
+	return __PRETTY_FUNCTION__;
+#endif
 }
 
 struct RawTypeNameFormat
 {
-	   size_t leading_junk = 46, trailing_junk = 1;
+	size_t leading_junk = 46, trailing_junk = 1;
+	size_t enum_leading_junk = 46, enum_trailing_junk = 1, enum_type_mult = 0;
 };
 
 // Returns `false` on failure.
-inline bool GetRawTypeNameFormat(RawTypeNameFormat *format)
+forceinline static inline bool GetRawTypeNameFormat(RawTypeNameFormat *format)
 {
 	const auto &str = RawTypeName<int>();
 	for (size_t i = 0;; i++)
@@ -37,11 +48,40 @@ inline bool GetRawTypeNameFormat(RawTypeNameFormat *format)
 	}
 	return false;
 }
-static RawTypeNameFormat InitFormat()
+enum IJK{
+	XYZ
+};
+forceinline static inline bool GetRawEnumNameFormat(RawTypeNameFormat *format)
 {
-	   RawTypeNameFormat format;
-	   GetRawTypeNameFormat(&format);
-	   return format;
+	const char *raw = RawTypeName<IJK>();
+	const auto &str = RawEnumName<IJK, XYZ>();
+	int j = 0;
+	for (size_t i = 0;; i++)
+	{
+		if (str[i] == 'I' && str[i+1] == 'J' && str[i+2] == 'K')
+		{
+			j++;
+		}
+		if (str[i] == 'X' && str[i+1] == 'Y' && str[i+2] == 'Z')
+		{
+			if (format)
+			{
+				format->enum_leading_junk = i - j * (strlen(raw) - format->leading_junk - format->trailing_junk);
+				format->enum_trailing_junk = sizeof(str)- i - 3 - 1; // `3` is the length of "XYZ", `1` is the space for the null terminator.
+				format->enum_type_mult = j;
+			}
+			return true;
+		}
+	}
+	return false;
+}
+
+forceinline static inline RawTypeNameFormat InitFormat()
+{
+	RawTypeNameFormat format;
+	GetRawTypeNameFormat(&format);
+	GetRawEnumNameFormat(&format);
+	return format;
 }
 
 static RawTypeNameFormat tn_format = InitFormat();
@@ -51,13 +91,48 @@ static inline void FillTypeName(char *name)
 {
 	const char *raw = RawTypeName<T>();
 	RawTypeNameFormat &format = tn_format;
-	if(!format.leading_junk) // initialization was not done?
-		GetRawTypeNameFormat(&format);
 	size_t len = strlen(raw) - format.leading_junk - format.trailing_junk;
 	if(len > 255) len = 255;
 
 	for (size_t i = 0; i < len; i++)
 		name[i] = raw[i + format.leading_junk];
+}
+
+template<typename T, T e>
+static inline void FillEnumName(char *name)
+{
+	const char *raw = RawTypeName<T>();
+	RawTypeNameFormat &format = tn_format;
+	size_t len = strlen(raw) - format.leading_junk - format.trailing_junk;
+	const char *rawe = RawEnumName<T,e>();
+	size_t lene = strlen(rawe) - format.enum_leading_junk - format.enum_type_mult * len  - format.enum_trailing_junk;
+	if(lene > 255) lene = 255;
+	for (size_t i = 0; i < lene; i++)
+		name[i] = rawe[i + format.enum_leading_junk + format.enum_type_mult * len];
+}
+
+template<typename T, T e = (T)0, T maxe = (T)255>
+static inline void StringifyEnum(char *name, T val)
+{
+	if(e == val)
+	{
+		FillEnumName<T,e>(name);
+		return;
+	}
+	if constexpr(e < maxe)
+		StringifyEnum<T,(T)(e+1),maxe>(name,val);
+}
+
+template<typename T, T e = (T)0, T maxe = (T)255, T def = (T)0>
+static inline T UnstringifyEnum(const char *name)
+{
+	char buffer[256];
+	FillEnumName<T,e>(buffer);
+	if(!strcmp(buffer, name))
+		return e;
+	if constexpr(e < maxe)
+		return UnstringifyEnum<T,(T)(e+1),maxe,def>(name);
+	return def;
 }
 
 template <typename T>
@@ -126,8 +201,6 @@ template <typename T> static size_t AlignOf()
 	return (size_t)(&((A*)0)->c) - sizeof(T);
 }
 
-template <typename T> void DumpGenericStruct(T *data);
-
 struct GenericReflect
 {
 	char *base;
@@ -183,10 +256,11 @@ struct GenericReflect
 		OverloadCheck(is_uniform_constructible, (T*)0,(*x = {0}));
 		OverloadCheck(is_array_subscriptable, (T*)0,(*x)[0]);
 		OverloadCheck(is_zero_addable, (T*)0,*x + 0);
+		OverloadCheck(is_num_assignable, (T*)0,*x = 2);
 		OverloadCheck(is_constructible, (T*)0,*x = T());
 		constexpr bool is_void_pointer = CompareTypes(T*, void**) || CompareTypes(T*, const void**);
 
-		//printf(" %s %d %d %d %d %d %d %d %d\n", TypeName<T>(),(int)off, (int)sizeof(T), index, is_numeric, is_pointer,is_uniform_constructible2, is_array_subscriptable, is_zero_addable);
+		//printf(" %s %d %d %d %d %d %d %d %d\n", TypeName<T>(),(int)off, (int)sizeof(T), index, is_numeric, is_pointer,is_uniform_constructible2, is_array_subscriptable, is_num_assignable);
 		if(last_typename != &TypeName<T>)
 			Flush(TypeName<T>(),(int)off, (int)sizeof(T));
 
@@ -231,7 +305,16 @@ struct GenericReflect
 				snprintf(&buffer[len], 256 - len, "%f ", (double)*(T*)(base + off));
 			}
 			else
-				snprintf(&buffer[len], 256 - len, "%lld ", (long long)*(T*)(base + off));
+			{
+				if constexpr(is_num_assignable)
+					snprintf(&buffer[len], 256 - len, "%lld ", (long long)*(T*)(base + off));
+				else
+				{
+					char buf[256];
+					StringifyEnum<T>(buf,*(T*)(base + off));
+					snprintf(&buffer[len], 256 - len, "%lld %s", (long long)*(T*)(base + off), buf);
+				}
+			}
 			len = strlen(buffer);
 			//printf("%f\n", (float)*(T*)(base + off));
 		}
