@@ -29,7 +29,7 @@ struct Mutex
 	}
 	inline void Unlock()
 	{
-		ExitCriticalSection(&mutex);
+		LeaveCriticalSection(&mutex);
 	}
 	Mutex(){
 		InitializeCriticalSection(&mutex);
@@ -45,7 +45,7 @@ struct Thread
 	Thread(void (*f)(void*), void *u = nullptr): func(f), userdata(u){}
 	void *userdata;
 
-	DWORD WINAPI Runner(LPVOID p)
+	static DWORD WINAPI Runner(LPVOID p)
 	{
 		Thread *t = (Thread*)p;
 		t->func(t->userdata);
@@ -55,7 +55,7 @@ struct Thread
 	void Start()
 	{
 		if(!thread_id)
-			thread_id = CreateThread( NULL, 0, Runner, this, 0, NULL);
+			thread_id = CreateThread( NULL, 0, &Thread::Runner, this, 0, NULL);
 	}
 	void Join()
 	{
@@ -79,7 +79,7 @@ forceinline static void SyncBarrier()
 	MemoryBarrier();
 }
 
-template <Typename T>
+template <typename T>
 forceinline static inline T Fetch(volatile T& t)
 {
 	MemoryBarrier();
