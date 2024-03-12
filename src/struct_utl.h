@@ -26,8 +26,8 @@ const auto &RawEnumName()
 
 struct RawTypeNameFormat
 {
-	size_t leading_junk = 46, trailing_junk = 1;
-	size_t enum_leading_junk = 46, enum_trailing_junk = 1, enum_type_mult = 0;
+	size_t leading_junk = 0, trailing_junk = 0;
+	size_t enum_leading_junk = 0, enum_trailing_junk = 0, enum_type_mult = 0;
 };
 
 // Returns `false` on failure.
@@ -84,13 +84,15 @@ forceinline static inline RawTypeNameFormat InitFormat()
 	return format;
 }
 
-static RawTypeNameFormat tn_format = InitFormat();
+static RawTypeNameFormat tn_format;
 
 template <typename T>
 static inline void FillTypeName(char *name)
 {
 	const char *raw = RawTypeName<T>();
 	RawTypeNameFormat &format = tn_format;
+	if(!format.leading_junk)
+		tn_format = InitFormat();
 	size_t len = strlen(raw) - format.leading_junk - format.trailing_junk;
 	if(len > 255) len = 255;
 
@@ -103,6 +105,8 @@ static inline void FillEnumName(char *name)
 {
 	const char *raw = RawTypeName<T>();
 	RawTypeNameFormat &format = tn_format;
+	if(!format.leading_junk)
+		tn_format = InitFormat();
 	size_t len = strlen(raw) - format.leading_junk - format.trailing_junk;
 	const char *rawe = RawEnumName<T,e>();
 	size_t lene = strlen(rawe) - format.enum_leading_junk - format.enum_type_mult * len  - format.enum_trailing_junk;
