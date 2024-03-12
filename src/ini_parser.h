@@ -90,6 +90,8 @@ struct IniParser
 	IniParser(const char *path)
 	{
 		_LoadFile(path);
+		if(!*this)
+			return;
 		size_t pos= 0;
 		static char root_section[] = "[root]";
 		Line section = {&root_section[0], &root_section[5]};
