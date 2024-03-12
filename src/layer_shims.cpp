@@ -77,6 +77,7 @@ struct EventPoller
 
 struct ConfigLoader
 {
+	HashArrayMap<const char*, const char*> *CurrentSection;
 	void SetIndex(int idx){}
 	void End(size_t size){}
 };
@@ -90,17 +91,39 @@ struct Option_
 	{
 		return val;
 	}
+	Option_(const Option_ &other) = delete;
 	Option_(){}
+	Option_(const T &def):val(def){}
 	Option_(const ConfigLoader &l){}
-	Option_(ConfigLoader &l){}
+	Option_(ConfigLoader &l){
+		const char *str = (*l.CurrentSection)[name];
+		if(str)
+			val = atoi(str);
+	}
 };
 #define Option(type,name) \
 	constexpr static const char *opt_name_##name = #name; \
 	Option_<type, opt_name_##name> name
 
-struct StringOption
+template <const auto &NAME>
+struct StringOption_
 {
-	// todo
+	constexpr static const char *name = NAME;
+	char val[256] = "";
+	StringOption_(const StringOption_ &other) = delete;
+	StringOption_(){}
+	StringOption_(const char *def)
+	{
+		strncpy(val, def, sizeof(val)-1);
+	}
+	StringOption_(const ConfigLoader &l){
+
+	}
+	StringOption_(ConfigLoader &l){
+		const char *str = (*l.CurrentSection)[name];
+		if(str)
+			strncpy(val, str, sizeof(val)-1);
+	}
 };
 
 struct SourceSection
@@ -140,15 +163,20 @@ struct Config
 {
 	// SectionHeader name
 	Option(int, serverPort);
+	Config(const Config &other) = delete;
 	// StringOption overrideInteractionProfile
 	// SectionReference startupProfile
 };
 
-static Config LoadConfig()
+static void LoadConfig(Config *c)
 {
 	IniParser p("layer_config.ini");
+	if(!p)
+		return;
 	ConfigLoader t;
-	return ConstructorVisiotor<Config, ConfigLoader>().Fill(t);
+	t.CurrentSection = &p.mDict["[root]"];
+	ConstructorVisiotor<Config, ConfigLoader>().Fill(c,t);
+	printf("ServerPort %d\n", (int)c->serverPort);
 }
 
 struct Layer
@@ -321,6 +349,7 @@ struct Layer
 		mSessions.Remove(session);
 		return nextLayer_xrDestroySession(session);
 	}
+	Config config = {};
 
 	// Connect this layer to new XrInstance
 	void Initialize(XrInstance inst, PFN_xrGetInstanceProcAddr gpa, const char**exts, uint32_t extcount )
@@ -339,6 +368,7 @@ struct Layer
 		mExtensionsCount = extcount;
 		for(int i = 0; i < USER_INVALID; i++)
 			nextLayer_xrStringToPath(inst, mszUserPaths[i], &mUserPaths[i]);
+		LoadConfig(&config);
 		poller.Start();
 	}
 
