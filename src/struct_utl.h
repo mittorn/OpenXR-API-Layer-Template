@@ -84,7 +84,8 @@ template <typename T, typename V, typename Seq = ISeq<>, typename = void>
 struct ConstructorVisiotor : Seq {
 
 	constexpr static int size = 0;
-	T Fill(V v, int s){ return T();}
+	void Fill(T *t, V v, int s){}
+	void Construct(V v, int s){}
 };
 
 template <typename T, typename V, int... Indices>
@@ -97,15 +98,25 @@ struct ConstructorVisiotor<
 	using Base = ConstructorVisiotor<T,V,ISeq<Indices..., sizeof...(Indices)>>;
 	constexpr static int size = 1 + Base::size;
 
-	T Fill(V v, int s = size)
+	void Fill(T *t, V v, int s = size)
 	{
 		if(sizeof...(Indices) == s - 1)
 		{
-			T r = T{(v.SetIndex(Indices),v)...,(v.SetIndex(s - 1),v)};
+			*t = T{(v.SetIndex(Indices),v)...,(v.SetIndex(s - 1),v)};
 			v.End(sizeof(T));
-			return r;
 		}
-		return Base::Fill(v,s);
+		else
+			Base::Fill(t, v, s);
+	}
+	void Construct(V v, int s = size)
+	{
+		if(sizeof...(Indices) == s - 1)
+		{
+			(void)T{(v.SetIndex(Indices),v)...,(v.SetIndex(s - 1),v)};
+			v.End(sizeof(T));
+		}
+		else
+			Base::Construct(v, s);
 	}
 };
 
@@ -243,7 +254,7 @@ void DumpGenericStruct(T *data)
 	printf("struct %s {\n", TypeName<T>());
 	GenericReflect t;
 	t.base = (char*)data;
-	ConstructorVisiotor<T, GenericReflect>().Fill(t);
+	ConstructorVisiotor<T, GenericReflect>().Construct(t);
 	printf("}\n");
 }
 
