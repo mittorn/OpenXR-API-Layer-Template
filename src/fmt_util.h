@@ -36,7 +36,7 @@ so enabling compiler optimization is very recommended
 #define stbsp__int64 signed long long
 #define stbsp__uint16 unsigned short
 
-#if (_MSC_VER > 1926) || (__GNUC__ >= 10) || (__clang_major__ >= 9)
+#if (_MSC_VER > 1926) || (__GNUC__ > 10) || (__clang_major__ >= 9)
 #define  STBSP__COPYFP(dest,src) dest = __builtin_bit_cast(decltype(dest), src)
 #define CONSTREAL constexpr
 #define RealToU64Inline RealToU64
