@@ -16,6 +16,7 @@
 #include "fmt_util.h"
 #include "thread_utl.h"
 #include "struct_utl.h"
+#include "ini_parser.h"
 #include <unistd.h>
 #define Log(...) FPrint(stderr, __VA_ARGS__)
 
@@ -97,14 +98,55 @@ struct Option_
 	constexpr static const char *opt_name_##name = #name; \
 	Option_<type, opt_name_##name> name
 
+struct StringOption
+{
+	// todo
+};
+
+struct SourceSection
+{
+	// SectionHeader name
+	// todo: enums somehow???
+	Option(int, sourceType);
+	// StringOption path
+	Option(float, minIn);
+	Option(float, maxIn);
+	Option(float, minOut);
+	Option(float, maxOut);
+	Option(float, threshold);
+	Option(int, transformFunc);
+
+};
+
+struct ActionMapSection
+{
+	// SectionHeader name
+	Option(bool, override);
+	// SourceMap boolSource
+	// SourceMap axis1Source
+	// SourceMap axis2Source
+	// SourceMap axis3Source
+	Option(int, customAction);
+	// SectionReference profileName
+};
+
+struct BindingProfileSection
+{
+	// SectionHeader name
+	// StringOption overrideInteractionProfile
+};
 
 struct Config
 {
+	// SectionHeader name
 	Option(int, serverPort);
+	// StringOption overrideInteractionProfile
+	// SectionReference startupProfile
 };
 
 static Config LoadConfig()
 {
+	IniParser p("layer_config.ini");
 	ConfigLoader t;
 	return ConstructorVisiotor<Config, ConfigLoader>().Fill(t);
 }
