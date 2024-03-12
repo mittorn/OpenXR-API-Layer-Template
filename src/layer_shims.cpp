@@ -110,6 +110,10 @@ struct StringOption_
 {
 	constexpr static const char *name = NAME;
 	char val[256] = "";
+	operator const char *()
+	{
+		return val;
+	}
 	StringOption_(const StringOption_ &other) = delete;
 	StringOption_(){}
 	StringOption_(const char *def)
@@ -125,6 +129,38 @@ struct StringOption_
 			strncpy(val, str, sizeof(val)-1);
 	}
 };
+
+#define StringOption(name) \
+constexpr static const char *opt_name_##name = #name; \
+	StringOption_<opt_name_##name> name
+
+template <typename T, T max, T def1, const auto &NAME>
+struct EnumOption_
+{
+	constexpr static const char *name = NAME;
+	T val;
+	operator T() const
+	{
+		return val;
+	}
+	EnumOption_(const EnumOption_ &other) = delete;
+	EnumOption_(){}
+	EnumOption_(const T &def):val(def){}
+	EnumOption_(const ConfigLoader &l){}
+	EnumOption_(ConfigLoader &l){
+		const char *str = (*l.CurrentSection)[name];
+		if(str)
+		{
+			val = UnstringifyEnum<T, (T)0, max, def1>(str);
+		}
+		else
+			val = def1;
+	}
+};
+
+#define EnumOption(type,name,maxvalue,def) \
+constexpr static const char *opt_name_##name = #name; \
+EnumOption_<type, maxvalue, def,opt_name_##name> name
 
 struct SourceSection
 {
@@ -159,12 +195,21 @@ struct BindingProfileSection
 	// StringOption overrideInteractionProfile
 };
 
+enum TestEnum
+{
+	test_unknown = 0,
+	test1,
+	test2,
+	test3,
+};
+
 struct Config
 {
 	// SectionHeader name
-	Option(int, serverPort);
 	Config(const Config &other) = delete;
-	// StringOption overrideInteractionProfile
+	Option(int, serverPort);
+	StringOption(overrideInteractionProfile);
+	EnumOption(TestEnum,testOption,test3, test_unknown) = test1;
 	// SectionReference startupProfile
 };
 
@@ -176,7 +221,9 @@ static void LoadConfig(Config *c)
 	ConfigLoader t;
 	t.CurrentSection = &p.mDict["[root]"];
 	ConstructorVisiotor<Config, ConfigLoader>().Fill(c,t);
-	printf("ServerPort %d\n", (int)c->serverPort);
+	Log("ServerPort %d\n", (int)c->serverPort);
+	Log("OverrideInteractionProfile %s\n", (const char*)c->overrideInteractionProfile);
+	Log("testOption %d\n", (int)c->testOption);
 }
 
 struct Layer
