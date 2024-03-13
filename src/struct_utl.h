@@ -163,21 +163,21 @@ template <typename T, typename V, typename Seq = ISeq<>, typename = void>
 struct ConstructorVisiotor : Seq {
 
 	constexpr static int size = 0;
-	void Fill(T *t, V v, int s){}
-	void Construct(V v, int s){}
+	void Fill(T *t, V &v, int s){}
+	void Construct(V &v, int s){}
 };
 
 template <typename T, typename V, int... Indices>
 struct ConstructorVisiotor<
 	T, V, ISeq<Indices...>,
-		typename MakeVoid<decltype(T{((void)(Indices), V())...,V()})>::t
+	typename MakeVoid<decltype(T{((void)(Indices), *(V*)0)...,*(V*)0})>::t
 	>
 	: ConstructorVisiotor<T, V, ISeq<Indices..., sizeof...(Indices)>>
 {
 	using Base = ConstructorVisiotor<T,V,ISeq<Indices..., sizeof...(Indices)>>;
 	constexpr static int size = 1 + Base::size;
 
-	void Fill(T *t, V v, int s = size)
+	void Fill(T *t, V &v, int s = size)
 	{
 		if(sizeof...(Indices) == s - 1)
 		{
@@ -187,7 +187,7 @@ struct ConstructorVisiotor<
 		else
 			Base::Fill(t, v, s);
 	}
-	void Construct(V v, int s = size)
+	void Construct(V &v, int s = size)
 	{
 		if(sizeof...(Indices) == s - 1)
 		{
@@ -216,6 +216,8 @@ struct GenericReflect
 	size_t chars_len = 0;
 	size_t body_begin = 0;
 	size_t zeroes_len = 0;
+	const char *tmpbase;
+	size_t off2 = 0;
 	const char *(*last_typename)() = nullptr;
 	void SetIndex(int idx){
 		index = idx;
@@ -251,7 +253,9 @@ struct GenericReflect
 	operator T()
 	{
 		if(index == 0)
-			off = 0;
+		{
+			off = off2 = 0;
+		}
 		while(off % AlignOf<T>())
 			off++;
 		OverloadCheck(is_numeric, (T*)0,(double)*x);
@@ -264,7 +268,7 @@ struct GenericReflect
 		OverloadCheck(is_constructible, (T*)0,*x = T());
 		constexpr bool is_void_pointer = CompareTypes(T*, void**) || CompareTypes(T*, const void**);
 
-		//printf(" %s %d %d %d %d %d %d %d %d\n", TypeName<T>(),(int)off, (int)sizeof(T), index, is_numeric, is_pointer,is_uniform_constructible2, is_array_subscriptable, is_num_assignable);
+		//printf(" %s %d %d %d %d %d %d %d %d %d\n", TypeName<T>(), (int)off2, (int)off, (int)sizeof(T), index, is_numeric, is_pointer,is_uniform_constructible2, is_array_subscriptable, is_num_assignable);
 		if(last_typename != &TypeName<T>)
 			Flush(TypeName<T>(),(int)off, (int)sizeof(T));
 
@@ -314,7 +318,7 @@ struct GenericReflect
 					snprintf(&buffer[len], 256 - len, "%lld ", (long long)*(T*)(base + off));
 				else
 				{
-					char buf[256];
+					char buf[256] = "";
 					StringifyEnum<T>(buf,*(T*)(base + off));
 					snprintf(&buffer[len], 256 - len, "%lld %s", (long long)*(T*)(base + off), buf);
 				}
@@ -330,7 +334,16 @@ struct GenericReflect
 		}
 		last_typename = TypeName<T>;
 		off += sizeof(T);
+#if 0
+		T local{}; // just proof NRVO is a myth
+		if(index == 0)
+			tmpbase = (const char*)(const void*)&local;
+		else
+			off2 = (const char*)(const void*)&local - tmpbase;
+		return local;
+#else
 		return T();
+#endif
 	}
 
 };
