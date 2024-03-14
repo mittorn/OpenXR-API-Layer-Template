@@ -229,7 +229,34 @@ struct StringOption_
 constexpr static const char *opt_name_##name = #name; \
 	StringOption_<opt_name_##name> name
 
-template <typename T, T max, T def1, const auto &NAME>
+#define IsDelim(c) (!(c) || ((c) == ' '|| (c) == ','))
+static size_t GetEnum(const char *scheme, const char *val)
+{
+	size_t index = 0;
+	while(true)
+	{
+		const char *pval = val;
+		char c;
+		while((c = *scheme))
+		{
+			if(!IsDelim(c))
+			{
+				index++;
+				break;
+			}
+			scheme++;
+		}
+		while(*scheme == *pval)scheme++, pval++;
+		if(IsDelim(*scheme) && !*pval)
+			return index;
+		if(!*scheme)
+			return 0;
+		scheme++;
+	}
+}
+
+
+template <typename T, const auto &NAME, const auto &SCHEME>
 struct EnumOption_
 {
 	constexpr static const char *name = NAME;
@@ -241,34 +268,33 @@ struct EnumOption_
 	EnumOption_(const EnumOption_ &other) = delete;
 	EnumOption_& operator=(const EnumOption_ &) = delete;
 	EnumOption_(){}
-	EnumOption_(const T &def):val(def){}
 	EnumOption_(ConfigLoader &l){
 		const char *&str = (*l.CurrentSection)[name];
 		if(str)
 		{
-			val = UnstringifyEnum<T, (T)0, max, def1>(str);
+			val = (T)GetEnum(SCHEME, str);
 		}
 		else
-			val = def1;
+			val = (T)0;
 		str = nullptr;
 	}
 };
 
-#define EnumOption(type,name,maxvalue,def) \
-constexpr static const char *opt_name_##name = #name; \
-EnumOption_<type, maxvalue, def,opt_name_##name> name
+#define EnumOption(name, ...) \
+	enum name ## _enum { \
+		name ## _none, \
+		__VA_ARGS__, \
+		name ## _count \
+	}; \
+	constexpr static const char *name ## _name = #name; \
+	constexpr static const char *name ## _scheme = #__VA_ARGS__; \
+	EnumOption_<name ## _enum, name ## _name, name ## _scheme> name
 
-enum SourceType
-{
-	sourcetyp_unknown,
-	remap,
-	server
-};
 
 struct SourceSection
 {
 	SectionHeader(source);
-	EnumOption(SourceType, sourceType, server, remap);
+	EnumOption(sourceType, remap, server);
 	StringOption(path);
 	Option(float, minIn);
 	Option(float, maxIn);
@@ -277,11 +303,6 @@ struct SourceSection
 	Option(float, threshold);
 	Option(int, transformFunc);
 
-};
-enum CustomAction
-{
-	action_none = 0,
-	changeProfile
 };
 struct BindingProfileSection;
 struct ActionMapSection
@@ -292,7 +313,7 @@ struct ActionMapSection
 	SectionReference(SourceSection, axis1);
 	SectionReference(SourceSection, axis2);
 	SectionReference(SourceSection, axis3);
-	EnumOption(CustomAction, customAction, changeProfile, action_none);
+	EnumOption(customAction, changeProfile);
 	SectionReference(BindingProfileSection, profileName);
 };
 
@@ -575,7 +596,7 @@ struct Layer
 	{
 		XrAction act;
 		XrResult r = nextLayer_xrCreateAction(actionSet, info, &act);
-		DumpGenericStruct(info);
+		//DumpGenericStruct(info);
 		if(r == XR_SUCCESS)
 		{
 			*action = act;
