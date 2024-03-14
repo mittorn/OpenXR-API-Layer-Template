@@ -137,35 +137,39 @@ forceinline static inline T UnstringifyEnum(const char *name)
 	return (T)0;
 }
 #else
-template<typename T, T e = (T)0, T maxe = (T)255>
-static inline const char *StringifyEnum(T val)
+template<typename T, T e = (T)0, T maxe = (T)255, size_t missing = 0>
+forceinline static inline const char *StringifyEnum(T val)
 {
 	constexpr size_t len1 = TN_d<T>.funclen + 1;
 	constexpr auto &d = EN_v<T,e>;
-	if constexpr(d.funcname[constformat.enum_type_mult * len1] < 'A' || !len1)
+	if constexpr(missing > 16)
 		return "";
+	else if constexpr(d.funcname[constformat.enum_type_mult * len1] < 'A' || !len1)
+		return StringifyEnum<T,(T)(e+1),maxe, missing + 1>(val);
 	if(e == val)
 		return &d.funcname[constformat.enum_type_mult * len1];
 
-	if constexpr(e < maxe && !(d.funcname[constformat.enum_type_mult * len1] < 'A' || !len1))
-		return StringifyEnum<T,(T)(e+1),maxe>(val);
+	if constexpr(e < maxe)// && !(d.funcname[constformat.enum_type_mult * len1] < 'A' || !len1))
+		return StringifyEnum<T,(T)(e+1),maxe, 0>(val);
 	return "";
 }
 
 #ifndef __clang__
-template<typename T, T e = (T)0, T maxe = (T)255, T def = (T)0>
+template<typename T, T e = (T)0, T maxe = (T)255, T def = (T)0, size_t missing = 0>
 forceinline static inline T UnstringifyEnum(const char *name)
 {
 	constexpr size_t len1 = GetTN2<T>().funclen + 1;
 	constexpr auto d = GetEN2<T,e>(constformat.enum_type_mult * len1);
-	if constexpr(d.firstchar < 'A' || !len1)
+	if constexpr(missing > 16)
 		return def;
+	else if constexpr(d.firstchar < 'A' || !len1)
+		return UnstringifyEnum<T,(T)(e+1),maxe,def, missing + 1>(name);
 
 	if(!strncmp(name, d.funcname, d.funclen))
 		return e;
 
 	if constexpr(e < maxe && !(d.firstchar < 'A' || !len1))
-		return UnstringifyEnum<T,(T)(e+1),maxe,def>(name);
+		return UnstringifyEnum<T,(T)(e+1),maxe,def, 0>(name);
 	else
 		return def;
 }
