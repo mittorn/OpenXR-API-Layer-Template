@@ -57,7 +57,7 @@ struct EventPoller
 	{
 	}
 	volatile bool Running = false;
-	void Start()
+	void Start(int port)
 	{
 		if(!InitSocket())
 			return;
@@ -73,32 +73,44 @@ struct EventPoller
 	}
 };
 
-
-
 struct ConfigLoader
 {
 	HashArrayMap<const char*, const char*> *CurrentSection;
+	const char *CurrentSectionName = "[root]";
+	void *CurrentSectionPointer = nullptr;
 	HashMap<const char*, void*> parsedSecions;
+	HashMap<const char*, GrowArray<void**>> forwardSections;
 	IniParser &parser;
 	ConfigLoader(IniParser &p) : CurrentSection(&p.mDict["[root]"]), parsedSecions(), parser(p) {}
 	void SetIndex(int idx){}
 	void End(size_t size){}
 };
-template<typename S, const auto &PREFIX>
+
 struct SectionHeader_
 {
-	constexpr static const char *prefix = PREFIX;
+	const char *name = nullptr;
+	SectionHeader_(){}
+	SectionHeader_(const SectionHeader_ &other) = delete;
+	SectionHeader_& operator=(const SectionHeader_ &) = delete;
+	SectionHeader_(ConfigLoader &l) : name(l.CurrentSectionName){
+	}
 };
-
+#define SectionHeader(PREFIX) \
+	constexpr static const char * prefix = #PREFIX; \
+	SectionHeader_ h
 
 template <typename S>
 struct Sections
 {
+
 	HashMap<const char*, S> mSections;
 	Sections(){}
+	Sections(const Sections &other) = delete;
+	Sections& operator=(const Sections &) = delete;
 	Sections(ConfigLoader &l)
 	{
 		HashArrayMap<const char*, const char*> *PrevioisSection = l.CurrentSection;
+		void *PrevioisSectionPointer = l.CurrentSectionPointer;
 		for(int i = 0; i < l.parser.mDict.TblSize; i++)
 		{
 			for(auto *node = l.parser.mDict.table[i]; node; node = node->n)
@@ -107,11 +119,25 @@ struct Sections
 				int len = SBPrint(prefix, "[%s.", S::prefix);
 				if(!strncmp(node->k, prefix, len-1))
 				{
-					S& section = mSections[node->k];
+					auto *sectionNode = mSections.GetOrAllocate(node->k);
+					S& section = sectionNode->v;
 					l.CurrentSection = &node->v;
-					ConstructorVisiotor<S, ConfigLoader>().Fill(&section,l);
+					l.CurrentSectionName = sectionNode->k;
 					l.parsedSecions[node->k] = (void*)&section;
+					l.CurrentSectionPointer = &section;
+					ConstructorVisitor<S, ConfigLoader>().Fill(&section,l);
+					auto *fwd = l.forwardSections.GetPtr(node->k);
+					if(fwd)
+					{
+						for(int j = 0; j < fwd->count; j++)
+						{
+							void **sec = (*fwd)[j];
+							*sec = (void*)&section;
+						}
+					}
+
 					l.CurrentSection = PrevioisSection;
+					l.CurrentSectionPointer = PrevioisSectionPointer;
 				}
 			}
 		}
@@ -123,16 +149,27 @@ struct SectionReference_
 {
 	constexpr static const char *name = NAME;
 	S *ptr = 0;
+	SectionReference_(const SectionReference_ &other) = delete;
+	SectionReference_& operator=(const SectionReference_ &) = delete;
 	SectionReference_(){}
 	SectionReference_(ConfigLoader &l)
 	{
-		char sectionName[256];
-		const char *str = (*l.CurrentSection)[name];
+		const char *&str = (*l.CurrentSection)[name];
 		if(str)
 		{
-			SBPrint(sectionName, "[%s.%s]", S::prefix,str);
-			ptr = (S*)l.parsedSecions[sectionName];
+			char sectionName[256];
+			SBPrint(sectionName, "[%s.%s]", S::prefix, str);
+			auto *n = l.parser.mDict.GetNode(sectionName);
+			if(!n)
+			{
+				Log("Section %s, key %s: missing config section referenced: %s!\n", ((SectionHeader_*)l.CurrentSectionPointer)->name, str, sectionName);
+				return;
+			}
+			ptr = (S*)l.parsedSecions[n->k];
+			if(!ptr)
+				l.forwardSections[n->k].Add((void**)&ptr);
 		}
+		str = nullptr;
 	}
 };
 #define SectionReference(type,name) \
@@ -150,12 +187,14 @@ struct Option_
 		return val;
 	}
 	Option_(const Option_ &other) = delete;
+	Option_& operator=(const Option_ &) = delete;
 	Option_(){}
 	Option_(const T &def):val(def){}
 	Option_(ConfigLoader &l){
-		const char *str = (*l.CurrentSection)[name];
+		const char *&str = (*l.CurrentSection)[name];
 		if(str)
-			val = atoi(str);
+			val = (T)atof(str);
+		str = nullptr;
 	}
 };
 #define Option(type,name) \
@@ -172,15 +211,17 @@ struct StringOption_
 		return val;
 	}
 	StringOption_(const StringOption_ &other) = delete;
+	StringOption_& operator=(const StringOption_ &) = delete;
 	StringOption_(){}
 	StringOption_(const char *def)
 	{
 		strncpy(val, def, sizeof(val)-1);
 	}
 	StringOption_(ConfigLoader &l){
-		const char *str = (*l.CurrentSection)[name];
+		const char *&str = (*l.CurrentSection)[name];
 		if(str)
 			strncpy(val, str, sizeof(val)-1);
+		str = nullptr;
 	}
 };
 
@@ -198,16 +239,18 @@ struct EnumOption_
 		return val;
 	}
 	EnumOption_(const EnumOption_ &other) = delete;
+	EnumOption_& operator=(const EnumOption_ &) = delete;
 	EnumOption_(){}
 	EnumOption_(const T &def):val(def){}
 	EnumOption_(ConfigLoader &l){
-		const char *str = (*l.CurrentSection)[name];
+		const char *&str = (*l.CurrentSection)[name];
 		if(str)
 		{
 			val = UnstringifyEnum<T, (T)0, max, def1>(str);
 		}
 		else
 			val = def1;
+		str = nullptr;
 	}
 };
 
@@ -224,10 +267,7 @@ enum SourceType
 
 struct SourceSection
 {
-	constexpr static const char *prefix = "source";
-	// SectionHeader name
-	// todo: enums somehow???
-	//Option(int, sourceType);
+	SectionHeader(source);
 	EnumOption(SourceType, sourceType, server, remap);
 	StringOption(path);
 	Option(float, minIn);
@@ -238,61 +278,95 @@ struct SourceSection
 	Option(int, transformFunc);
 
 };
-
-
-struct BindingProfileSection
+enum CustomAction
 {
-	constexpr static const char *prefix = "bindings";
-	// SectionHeader name
-	StringOption(overrideInteractionProfile);
+	action_none = 0,
+	changeProfile
 };
-
+struct BindingProfileSection;
 struct ActionMapSection
 {
-	constexpr static const char *prefix = "actionmap";
-	// SectionHeader name
+	SectionHeader(actionmap);
 	Option(bool, override);
-	// SourceMap boolSource
-	// SourceMap axis1Source
-	// SourceMap axis2Source
-	// SourceMap axis3Source
-	Option(int, customAction);
+	// TODO: RPN or something similar
+	SectionReference(SourceSection, axis1);
+	SectionReference(SourceSection, axis2);
+	SectionReference(SourceSection, axis3);
+	EnumOption(CustomAction, customAction, changeProfile, action_none);
 	SectionReference(BindingProfileSection, profileName);
 };
 
-
-enum TestEnum
+struct BindingProfileSection
 {
-	test_unknown = 0,
-	test1,
-	test2,
-	test3,
+	SectionHeader(bindings);
+	StringOption(overrideInteractionProfile);
+	struct DynamicActionMaps {
+		HashMap<const char *, ActionMapSection*> maps;
+		DynamicActionMaps(){}
+		DynamicActionMaps(const DynamicActionMaps &other) = delete;
+		DynamicActionMaps& operator=(const DynamicActionMaps &) = delete;
+		DynamicActionMaps(ConfigLoader &l)
+		{
+			for(int i = 0; i < l.CurrentSection->TblSize; i++)
+			{
+				for(int j = 0; j < l.CurrentSection->table[i].count; j++)
+				{
+					char sectionName[256];
+					if(!l.CurrentSection->table[i][j].v)
+						continue;
+					SBPrint(sectionName, "[%s.%s]", ActionMapSection::prefix, l.CurrentSection->table[i][j].v);
+					auto *n = l.parser.mDict.GetNode(sectionName);
+					if(!n)
+					{
+						Log("Section %s, actionmap %s: missing config section referenced: %s\n", ((SectionHeader_*)l.CurrentSectionPointer)->name, l.CurrentSection->table[i][j].k, sectionName);
+						continue;
+					}
+
+					ActionMapSection *map = (ActionMapSection *)l.parsedSecions[n->k];
+					if(!map)
+						continue;
+					maps[l.CurrentSection->table[i][j].k] = map;
+					l.CurrentSection->table[i][j].v = nullptr;
+				}
+			}
+		}
+	} actionMaps;
 };
 
 struct Config
 {
 	// SectionHeader name
 	Config(const Config &other) = delete;
+	Config& operator=(const Config &) = delete;
 	Option(int, serverPort);
 	StringOption(overrideInteractionProfile);
-	EnumOption(TestEnum,testOption,test3, test_unknown) = test1;
 	Sections<SourceSection> sources;
-	Sections<BindingProfileSection> bindings;
 	Sections<ActionMapSection> actionMaps;
+	Sections<BindingProfileSection> bindings;
 	SectionReference(BindingProfileSection,startupProfile);
 };
 
 static void LoadConfig(Config *c)
 {
-	IniParser p("layer_config.ini");
+	const char *cfg = "layer_config.ini";
+	IniParser p(cfg);
 	if(!p)
+	{
+		Log("Cannot load %s", cfg);
 		return;
+	}
 	ConfigLoader t = ConfigLoader(p);
-	t.CurrentSection = &p.mDict["[root]"];
-	ConstructorVisiotor<Config, ConfigLoader>().Fill(c,t);
+	t.CurrentSectionPointer = c;
+	ConstructorVisitor<Config, ConfigLoader>().Fill(c,t);
+	for(int i = 0; i < p.mDict.TblSize; i++)
+		for(auto *node = p.mDict.table[i]; node; node = node->n)
+			for(int j = 0; j < node->v.TblSize; j++)
+				for(int k = 0; k < node->v.table[j].count; k++ )
+					if(node->v.table[j][k].v)
+						Log("Section %s: unused config key %s = %s\n", node->k, node->v.table[j][k].k, node->v.table[j][k].v);
+
 	Log("ServerPort %d\n", (int)c->serverPort);
 	Log("OverrideInteractionProfile %s\n", (const char*)c->overrideInteractionProfile);
-	Log("testOption %d\n", (int)c->testOption);
 }
 
 struct Layer
@@ -485,7 +559,8 @@ struct Layer
 		for(int i = 0; i < USER_INVALID; i++)
 			nextLayer_xrStringToPath(inst, mszUserPaths[i], &mUserPaths[i]);
 		LoadConfig(&config);
-		poller.Start();
+		if(config.serverPort)
+			poller.Start(config.serverPort);
 	}
 
 	// Only need this if extensions used
