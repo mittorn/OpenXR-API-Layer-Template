@@ -3,159 +3,193 @@
 #include <string.h>
 #include "fmt_util.h"
 
-
-template <typename T>
-const auto &RawTypeName()
-{
-#ifdef _MSC_VER
-	return __FUNCSIG__;
+#ifdef __GNUC__
+#define FUNCNAME __PRETTY_FUNCTION__
 #else
-	return __PRETTY_FUNCTION__;
+#define FUNCNAME __FUNCSIG__
 #endif
-}
 
-template <typename E, E v>
-const auto &RawEnumName()
+// first variant: keep full string
+template <size_t len>
+struct TN
 {
-#ifdef _MSC_VER
-	return __FUNCSIG__;
-#else
-	return __PRETTY_FUNCTION__;
-#endif
-}
-
-struct RawTypeNameFormat
-{
-	size_t leading_junk = 0, trailing_junk = 0;
-	size_t enum_leading_junk = 0, enum_trailing_junk = 0, enum_type_mult = 0;
+	size_t funclen;
+	char funcname[len];
+	constexpr TN(const char (&func)[len], size_t begin, size_t end) : funcname(), funclen(len - end - 1 - begin){ for(int i = 0; i < funclen; i++)funcname[i] = func[i + begin];}
 };
 
-// Returns `false` on failure.
-forceinline static inline bool GetRawTypeNameFormat(RawTypeNameFormat *format)
+// only keep pointer and first char
+template <size_t len>
+struct TN2
 {
-	const auto &str = RawTypeName<int>();
-	for (size_t i = 0;; i++)
-	{
-		if (str[i] == 'i' && str[i+1] == 'n' && str[i+2] == 't')
-		{
-			if (format)
-			{
-				format->leading_junk = i;
-				format->trailing_junk = sizeof(str)-i-3-1; // `3` is the length of "int", `1` is the space for the null terminator.
-			}
-			return true;
-		}
-	}
-	return false;
-}
+	size_t funclen;
+	const char *funcname;
+	const char firstchar;
+	constexpr TN2(const char (&func)[len], size_t begin, size_t end) : funcname(&func[begin]), funclen(len - end - 1 - begin), firstchar(func[begin]){}
+};
+
+struct TN_Format
+{
+	size_t leading_junk = 0, trailing_junk = 0, enum_leading_junk = 0, enum_trailing_junk = 0, enum_type_mult = 0;
+};
 enum IJK{
 	XYZ
 };
-forceinline static inline bool GetRawEnumNameFormat(RawTypeNameFormat *format)
+
+// raw (need for format detection)
+template <typename T>
+constexpr const auto GetTN0()
 {
-	const char *raw = RawTypeName<IJK>();
-	const auto &str = RawEnumName<IJK, XYZ>();
-	int j = 0;
-	for (size_t i = 0;; i++)
+	return TN(FUNCNAME,0,0);
+}
+template <typename T>
+constexpr auto TN_raw = GetTN0<T>();
+
+template <typename T, T e>
+constexpr const auto GetEN0(size_t off)
+{
+	return TN(FUNCNAME,0,0);
+}
+template <typename T, T e>
+constexpr auto EN_raw = GetEN0<T,e>(0);
+
+// find offsets of type and enum names
+constexpr TN_Format PrepareFormat()
+{
+	TN_Format format;
+	size_t i = 0, j = 0;
+	for(i = 0; i < TN_raw<int>.funclen - 3; i++)
 	{
-		if (str[i] == 'I' && str[i+1] == 'J' && str[i+2] == 'K')
+		if (TN_raw<int>.funcname[i] == 'i' && TN_raw<int>.funcname[i+1] == 'n' && TN_raw<int>.funcname[i+2] == 't')
+		{
+			format.leading_junk = i;
+			format.trailing_junk = TN_raw<int>.funclen-i-3-1;
+			break;
+		}
+	}
+	for (i = 0; i <EN_raw<IJK, XYZ>.funclen - 3; i++)
+	{
+		if (EN_raw<IJK, XYZ>.funcname[i] == 'I' && EN_raw<IJK, XYZ>.funcname[i+1] == 'J' && EN_raw<IJK, XYZ>.funcname[i+2] == 'K')
 		{
 			j++;
 		}
-		if (str[i] == 'X' && str[i+1] == 'Y' && str[i+2] == 'Z')
+		if (EN_raw<IJK, XYZ>.funcname[i] == 'X' && EN_raw<IJK, XYZ>.funcname[i+1] == 'Y' && EN_raw<IJK, XYZ>.funcname[i+2] == 'Z')
 		{
-			if (format)
-			{
-				format->enum_leading_junk = i - j * (strlen(raw) - format->leading_junk - format->trailing_junk);
-				format->enum_trailing_junk = sizeof(str)- i - 3 - 1; // `3` is the length of "XYZ", `1` is the space for the null terminator.
-				format->enum_type_mult = j;
-			}
-			return true;
+			format.enum_leading_junk = i - j * (TN_raw<IJK>.funclen - format.leading_junk - format.trailing_junk);
+			format.enum_trailing_junk = EN_raw<IJK, XYZ>.funclen - i - 3 - 1; // `3` is the length of "XYZ", `1` is the space for the null terminator.
+			format.enum_type_mult = j;
+			break;
 		}
 	}
-	return false;
-}
-
-forceinline static inline RawTypeNameFormat InitFormat()
-{
-	RawTypeNameFormat format;
-	GetRawTypeNameFormat(&format);
-	GetRawEnumNameFormat(&format);
 	return format;
 }
 
-static RawTypeNameFormat tn_format;
+constexpr TN_Format constformat = PrepareFormat();
 
+// full constexpr string copy (maybe slow)
 template <typename T>
-static inline void FillTypeName(char *name)
+constexpr const auto GetTN1()
 {
-	const char *raw = RawTypeName<T>();
-	RawTypeNameFormat &format = tn_format;
-	if(!format.leading_junk)
-		tn_format = InitFormat();
-	size_t len = strlen(raw) - format.leading_junk - format.trailing_junk;
-	if(len > 255) len = 255;
+	return TN(FUNCNAME,constformat.leading_junk, constformat.trailing_junk + 1);
+}
+template <typename T>
+constexpr auto TN_v = GetTN1<T>();
 
-	for (size_t i = 0; i < len; i++)
-		name[i] = raw[i + format.leading_junk];
+template <typename T, T e>
+constexpr const auto GetEN1(size_t off)
+{
+	return TN(FUNCNAME,constformat.enum_leading_junk, constformat.enum_trailing_junk + 1);
+}
+template <typename T, T e>
+constexpr auto EN_v = GetEN1<T,e>(0);
+
+// skip string copy, just pass pointer. String is not cut
+template <typename T>
+constexpr const auto GetTN2()
+{
+	return TN2(FUNCNAME,constformat.leading_junk, constformat.trailing_junk + 1);
+}
+template <typename T>
+constexpr auto TN_d = GetTN2<T>();
+
+template <typename T, T e>
+constexpr const auto GetEN2(size_t off)
+{
+	return TN2(FUNCNAME,constformat.enum_leading_junk + off, constformat.enum_trailing_junk + 1);
 }
 
-template<typename T, T e>
-static inline void FillEnumName(char *name)
+template <typename T>
+constexpr const char *TypeName()
 {
-	const char *raw = RawTypeName<T>();
-	RawTypeNameFormat &format = tn_format;
-	if(!format.leading_junk)
-		tn_format = InitFormat();
-	size_t len = strlen(raw) - format.leading_junk - format.trailing_junk;
-	const char *rawe = RawEnumName<T,e>();
-	size_t lene = strlen(rawe) - format.enum_leading_junk - format.enum_type_mult * len  - format.enum_trailing_junk;
-	if(lene > 255) lene = 255;
-	for (size_t i = 0; i < lene; i++)
-		name[i] = rawe[i + format.enum_leading_junk + format.enum_type_mult * len];
+	return TN_v<T>.funcname;
+}
+#if !(__clang__) && !(__GNUC__ > 8)
+// broken
+template<typename T, T e = (T)0, T maxe = (T)255>
+static inline const char *StringifyEnum(T val)
+{
+	return "";
 }
 
 template<typename T, T e = (T)0, T maxe = (T)255>
-static inline void StringifyEnum(char *name, T val)
+forceinline static inline T UnstringifyEnum(const char *name)
 {
-	if(e == val)
-	{
-		FillEnumName<T,e>(name);
-		return;
-	}
-	if constexpr(e < maxe)
-		StringifyEnum<T,(T)(e+1),maxe>(name,val);
+	return (T)0;
 }
+#else
+template<typename T, T e = (T)0, T maxe = (T)255>
+static inline const char *StringifyEnum(T val)
+{
+	constexpr size_t len1 = TN_d<T>.funclen + 1;
+	constexpr auto &d = EN_v<T,e>;
+	if constexpr(d.funcname[constformat.enum_type_mult * len1] < 'A' || !len1)
+		return "";
+	if(e == val)
+		return &d.funcname[constformat.enum_type_mult * len1];
+
+	if constexpr(e < maxe && !(d.funcname[constformat.enum_type_mult * len1] < 'A' || !len1))
+		return StringifyEnum<T,(T)(e+1),maxe>(val);
+	return "";
+}
+
+#ifndef __clang__
+template<typename T, T e = (T)0, T maxe = (T)255, T def = (T)0>
+forceinline static inline T UnstringifyEnum(const char *name)
+{
+	constexpr size_t len1 = GetTN2<T>().funclen + 1;
+	constexpr auto d = GetEN2<T,e>(constformat.enum_type_mult * len1);
+	if constexpr(d.firstchar < 'A' || !len1)
+		return def;
+
+	if(!strncmp(name, d.funcname, d.funclen))
+		return e;
+
+	if constexpr(e < maxe && !(d.firstchar < 'A' || !len1))
+		return UnstringifyEnum<T,(T)(e+1),maxe,def>(name);
+	else
+		return def;
+}
+#else
 
 template<typename T, T e = (T)0, T maxe = (T)255, T def = (T)0>
-static inline T UnstringifyEnum(const char *name)
+forceinline static inline T UnstringifyEnum(const char *name)
 {
-	char buffer[256];
-	FillEnumName<T,e>(buffer);
-	if(!strcmp(buffer, name))
+	constexpr size_t len1 = GetTN2<T>().funclen + 1;
+	constexpr auto d = GetEN1<T,e>(0);
+	if constexpr(d.funcname[constformat.enum_type_mult * len1] < 'A' || !len1)
+		return def;
+
+	if(!strncmp(name, d.funcname+constformat.enum_type_mult * len1, d.funclen - constformat.enum_type_mult * len1))
 		return e;
-	if constexpr(e < maxe)
+
+	if constexpr(e < maxe && !(d.funcname[constformat.enum_type_mult * len1] < 'A' || !len1))
 		return UnstringifyEnum<T,(T)(e+1),maxe,def>(name);
-	return def;
+	else
+		return def;
 }
 
-template <typename T>
-struct tn_t{
-	char str[256];
-	tn_t()
-	{
-		FillTypeName<T>(str);
-	}
-};
-
-template <typename T>
-tn_t<T> tn;
-
-template <typename T>
-static inline const char *TypeName()
-{
-	return tn<T>.str;
-}
+#endif
+#endif
 template <int ... i> struct ISeq{};
 template<typename... Ts> struct MakeVoid { typedef void t; };
 
@@ -320,11 +354,7 @@ struct GenericReflect
 				if constexpr(is_num_assignable)
 					snprintf(&buffer[len], 256 - len, "%lld ", (long long)*(T*)(base + off));
 				else
-				{
-					char buf[256] = "";
-					StringifyEnum<T>(buf,*(T*)(base + off));
-					snprintf(&buffer[len], 256 - len, "%lld %s", (long long)*(T*)(base + off), buf);
-				}
+					snprintf(&buffer[len], 256 - len, "%lld %s", (long long)*(T*)(base + off), StringifyEnum<T>(*(T*)(base + off)));
 			}
 			len = strlen(buffer);
 			//printf("%f\n", (float)*(T*)(base + off));
