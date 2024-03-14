@@ -439,16 +439,27 @@ enum Formats {
 // helps incapsulate write operations
 // preventing compiler from trying unroll write
 // and fail all unrols at all
-template <size_t blen> struct FixedOutputBuffer
+#if 1
+struct OutputBuffer
 {
 	char *buf;
 	size_t left;
-	constexpr FixedOutputBuffer(char *a) : buf(a), left(blen){}
+	constexpr OutputBuffer(char *a, size_t blen) : buf(a), left(blen){}
 	forceinline constexpr  void w(char c)
 	{
 		*buf = c;
 		buf += left > 0;
 		left--;
+	}
+	forceinline constexpr size_t getLeft() const
+	{
+		return left;
+	}
+
+	forceinline constexpr void advance(size_t l)
+	{
+		left -= l;
+		buf += l;
 	}
 
 	forceinline constexpr  void w(const char *s, int len)
@@ -457,8 +468,36 @@ template <size_t blen> struct FixedOutputBuffer
 		for(size_t t = 0; t < len; t++ )
 			w(s[t]);
 	}
-
 };
+#else
+struct OutputBuffer
+{
+	char *buf;
+	char *end;
+	constexpr OutputBuffer(char *a, size_t blen) : buf(a), end(buf + blen){}
+	forceinline constexpr  void w(char c)
+	{
+		*buf = c;
+		buf += ((size_t)(buf - end)) >> 63;
+	}
+	forceinline constexpr size_t getLeft() const
+	{
+		return end - buf;
+	}
+
+	forceinline constexpr void advance(size_t l)
+	{
+		buf += l;
+	}
+
+	forceinline constexpr  void w(const char *s, int len)
+	{
+#pragma GCC unroll 8
+		for(size_t t = 0; t < len; t++ )
+			w(s[t]);
+	}
+};
+#endif
 // Format wrappers
 constexpr static const char f_hex[] = "0123456789abcdef0123456789ABCDEF";
 // octal, hex or binary
@@ -529,13 +568,13 @@ forceinline constexpr static inline void ConvertI(Buf &s, Arg arg, char fmtc, si
 		if( b & 1)
 			i++,b2--;
 
-		if(b > s.left)
-			b = b2 = s.left;
+		if(b > s.getLeft())
+			b = b2 = s.getLeft();
 		s.buf += b;
 		while(i < b) WRITE_PAIRS;
 		if(b != b2)
 			*(s.buf-1) = num + '0';
-		s.buf += b2, s.left -= b2;
+		s.advance(b2);
 	}
 	else
 		s.w(__PRETTY_FUNCTION__, sizeof(__PRETTY_FUNCTION__));
@@ -615,7 +654,7 @@ forceinline constexpr static inline void ConvertF(Buf &s, Arg arg, int fw, int p
 					s.w(lead);
 				if(sign)
 					s.w(sign);
-				if(digits_vis > s.left)
+				if(digits_vis > s.getLeft())
 				{
 					s.w('$');
 					return;
@@ -638,7 +677,7 @@ forceinline constexpr static inline void ConvertF(Buf &s, Arg arg, int fw, int p
 				while(i+1 < l)WRITE_PAIRS;
 				if(i < l)
 					*--s.buf = num%10 + '0',num/=10,i++;
-				s.buf += i+1,s.left -= i+1;
+				s.advance(i+1);
 			}
 
 		}
@@ -692,8 +731,7 @@ forceinline constexpr static inline void ConvertE(Buf &s, Arg arg, int fw, int p
 			if(l > 1)
 				*--s.buf = '.';
 			*--s.buf = num%10 + '0',num/=10,i++;
-			s.buf += l>1? l + 1: 1;
-			s.left -= l>1? l + 1: 1;
+			s.advance(l>1? l + 1: 1);
 			s.w('e');
 			dp-=1;
 			if(dp < 0)
@@ -711,8 +749,7 @@ forceinline constexpr static inline void ConvertE(Buf &s, Arg arg, int fw, int p
 				*--s.buf = '0' + (dp % 10);
 				dp/=10;
 			}
-			s.buf += n1;
-			s.left -= n1;
+			s.advance(n1);
 		}
 		else
 			ConvertI(s,arg,0,fw,' ',sign);
@@ -996,24 +1033,22 @@ template<typename Buf, size_t fmtlen, typename Arg, typename ... Args> forceinli
 ///TODO: hide under namespace or change naming
 template<size_t fmtlen, size_t buflen, typename ... Args> forceinline constexpr inline int SBPrint(char (&buf)[buflen], char const (&fmt)[fmtlen], const Args& ... args)
 {
-	FixedOutputBuffer<buflen> s{buf};
+	OutputBuffer s{buf, buflen};
 	SPrint_impl(s, 0, fmt, args...);
 	return s.buf - buf;
 }
-#if 0
 template<size_t fmtlen, typename ... Args> forceinline inline int SNPrint(char *buf, size_t len, char const (&fmt)[fmtlen], const Args& ... args)
 {
-	OutputBuffer s{buf, &buf[len]};
+	OutputBuffer s{buf, len};
 	SPrint_impl(s, 0, fmt, args...);
 	return s.buf - buf;
 }
-#endif
 #ifdef FMT_ENABLE_STDIO
 #include<stdio.h>
 template<size_t fmtlen, typename ... Args> forceinline inline int FPrint(FILE *f, char const (&fmt)[fmtlen], const Args& ... args)
 {
 	char buf[1024];
-	FixedOutputBuffer<1024> s{buf};
+	OutputBuffer s{buf, 1024};
 	SPrint_impl(s, 0, fmt, args...);
 	fputs(buf,f);
 	return s.buf - buf;
