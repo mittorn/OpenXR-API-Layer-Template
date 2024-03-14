@@ -160,28 +160,31 @@ template <int ... i> struct ISeq{};
 template<typename... Ts> struct MakeVoid { typedef void t; };
 
 template <typename T, typename V, typename Seq = ISeq<>, typename = void>
-struct ConstructorVisiotor : Seq {
+struct ConstructorVisitor : Seq {
 
 	constexpr static int size = 0;
 	void Fill(T *t, V &v, int s){}
 	void Construct(V &v, int s){}
 };
 
+struct StubPlacementNew{void *t;};
+inline void* operator new (size_t n, const StubPlacementNew& s) {return s.t;};
 template <typename T, typename V, int... Indices>
-struct ConstructorVisiotor<
+struct ConstructorVisitor<
 	T, V, ISeq<Indices...>,
 	typename MakeVoid<decltype(T{((void)(Indices), *(V*)0)...,*(V*)0})>::t
 	>
-	: ConstructorVisiotor<T, V, ISeq<Indices..., sizeof...(Indices)>>
+	: ConstructorVisitor<T, V, ISeq<Indices..., sizeof...(Indices)>>
 {
-	using Base = ConstructorVisiotor<T,V,ISeq<Indices..., sizeof...(Indices)>>;
+	using Base = ConstructorVisitor<T,V,ISeq<Indices..., sizeof...(Indices)>>;
 	constexpr static int size = 1 + Base::size;
 
 	void Fill(T *t, V &v, int s = size)
 	{
 		if(sizeof...(Indices) == s - 1)
 		{
-			*t = T{(v.SetIndex(Indices),v)...,(v.SetIndex(s - 1),v)};
+			t->~T();
+			new(StubPlacementNew{t})T{(v.SetIndex(Indices),v)...,(v.SetIndex(s - 1),v)};
 			v.End(sizeof(T));
 		}
 		else
@@ -354,7 +357,7 @@ void DumpGenericStruct(T *data)
 	printf("struct %s {\n", TypeName<T>());
 	GenericReflect t;
 	t.base = (char*)data;
-	ConstructorVisiotor<T, GenericReflect>().Construct(t);
+	ConstructorVisitor<T, GenericReflect>().Construct(t);
 	printf("}\n");
 }
 

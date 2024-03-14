@@ -100,6 +100,28 @@ inline bool KeyCompare(const char * const &a, const char * const &b)
 	return !strcmp(a,b);
 }
 
+
+template<typename Key>
+forceinline static inline const Key &KeyAlloc(const Key &a)
+{
+	return a;
+}
+template<>
+inline const char * const &KeyAlloc<const char*>(const char * const &a) = delete;
+
+inline const char * const KeyAlloc(const char * const &a)
+{
+	return strdup((const char*)a);
+}
+
+template<typename Key>
+forceinline static inline void KeyDealloc(const Key &a){}
+template<>
+inline void KeyDealloc(const char * const &a)
+{
+	free((void*)a);
+}
+
 template<size_t TblSize, typename Key>
 forceinline static inline size_t HashFunc(const Key &key)
 {
@@ -151,6 +173,7 @@ struct HashMap {
 			{
 				Node *prev = entry;
 				entry = entry->n;
+				KeyDealloc(prev->k);
 				delete prev;
 			}
 			table[i] = NULL;
@@ -158,22 +181,30 @@ struct HashMap {
 	}
 
 	// just in case: check existance or constant access
-	forceinline Value *GetPtr(const Key &key) const
+	forceinline Node *GetNode(const Key &key) const
 	{
 		size_t hashValue = HashFunc<TblSize>(key);
 		Node *entry = table[hashValue];
 		while(likely(entry))
 		{
 			if(KeyCompare(entry->k, key))
-				return &entry->v;
+				return entry;
 			entry = entry->n;
 		}
 		return nullptr;
 	}
 
+	forceinline Value *GetPtr(const Key &key) const
+	{
+		Node *entry = GetNode(key);
+		if(entry)
+			return &entry->v;
+		return nullptr;
+	}
+
 	Value &operator [] (const Key &key)
 	{
-		return GetOrAllocate(key);
+		return GetOrAllocate(key)->v;
 	}
 
 #define HASHFIND(key) \
@@ -187,9 +218,9 @@ struct HashMap {
 			entry = entry->n; \
 		}
 
-	Node * noinline _Allocate(Key key, size_t hashValue, Node *prev, Node *entry)
+	Node * noinline _Allocate(const Key &key, size_t hashValue, Node *prev, Node *entry)
 	{
-		entry = new Node(key);
+		entry = new Node(KeyAlloc(key));
 		if(unlikely(!entry))
 		{
 			static Node error(key);
@@ -203,14 +234,14 @@ struct HashMap {
 		return entry;
 	}
 
-	Value& GetOrAllocate(const Key &key)
+	Node *GetOrAllocate(const Key &key)
 	{
 		HASHFIND(key);
 
 		if(unlikely(!entry))
 			entry = _Allocate(key,hashValue, prev, entry);
 
-		return entry->v;
+		return entry;
 	}
 
 	bool Remove(const Key &key)
@@ -224,6 +255,8 @@ struct HashMap {
 			table[hashValue] = entry->n;
 		else
 			prev->n = entry->n;
+
+		KeyDealloc(entry->k);
 
 		delete entry;
 		return true;
@@ -253,6 +286,9 @@ struct HashArrayMap {
 	}
 
 	~HashArrayMap() {
+		for(int i = 0; i < TblSize; i++)
+			for(int j = 0; j < table[i].count; j++)
+				KeyDealloc(table[i][j].k);
 	}
 
 	// just in case: check existance or constant access
@@ -284,7 +320,7 @@ struct HashArrayMap {
 	{
 		HASHFIND(key);
 		if(i == entry.count )
-			entry.Add(Node(key));
+			entry.Add(Node(KeyAlloc(key)));
 
 		return entry[i].v;
 	}
@@ -294,6 +330,7 @@ struct HashArrayMap {
 		HASHFIND(key);
 		if(i != entry.count)
 		{
+			KeyDealloc(entry[i]);
 			entry.RemoveAt(i);
 			return true;
 		}
