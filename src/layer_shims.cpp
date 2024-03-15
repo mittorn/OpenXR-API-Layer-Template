@@ -313,7 +313,7 @@ struct ActionMapSection
 	SectionReference(SourceSection, axis1);
 	SectionReference(SourceSection, axis2);
 	SectionReference(SourceSection, axis3);
-	EnumOption(customAction, changeProfile);
+	EnumOption(customAction, reloadSettings, changeProfile, triggerInteractionChange);
 	SectionReference(BindingProfileSection, profileName);
 };
 
@@ -469,10 +469,36 @@ struct Layer
 		return XR_ERROR_HANDLE_INVALID; \
 	}
 
+	// custom action set or server app should write data here
+	struct ActionSource
+	{
+		//SourceSection *mpConfig;
+		void *priv;
+		float (*func)(void *priv);
+		float GetValue()
+		{
+			if(func)
+				return func(priv);
+			return 0;
+		}
+	};
+
+	struct ActionMap
+	{
+		//ActionMapSection *mpConfig;
+		ActionSource src[3];
+		float GetAxis(int axis)
+		{
+			// todo: actual axis mapping and calculations should be done here?
+			return src[axis].GetValue();
+		}
+	};
+
 	struct ActionState
 	{
 		bool ignoreDefault = false;
 		bool trigger = false;
+		ActionMap map;
 	};
 
 	struct Action
@@ -482,19 +508,32 @@ struct Layer
 		ActionState baseState[USER_PATH_COUNT];
 	};
 
-	struct ActionFloat : Action
-	{
-		XrActionStateFloat floatState[USER_PATH_COUNT];
-	};
-
 	struct ActionBoolean : Action
 	{
 		XrActionStateBoolean boolState[USER_PATH_COUNT];
+		void Update(int hand)
+		{
+			boolState[hand].currentState = baseState[hand].map.GetAxis(0);
+		}
+	};
+
+	struct ActionFloat : Action
+	{
+		XrActionStateFloat floatState[USER_PATH_COUNT];
+		void Update(int hand)
+		{
+			floatState[hand].currentState = baseState[hand].map.GetAxis(0);
+		}
 	};
 
 	struct ActionVec2 : Action
 	{
 		XrActionStateVector2f vec2State[USER_PATH_COUNT];
+		void Update(int hand)
+		{
+			vec2State[hand].currentState.x = baseState[hand].map.GetAxis(0);
+			vec2State[hand].currentState.y = baseState[hand].map.GetAxis(1);
+		}
 	};
 
 	//HashMap<XrAction, Action> mActionsOther;
@@ -736,9 +775,7 @@ struct Layer
 					if(hand.ignoreDefault)
 					{
 						XrActionStateBoolean &state = a.boolState[handPath];
-						static bool chg = false;
-						chg = !chg;
-						state.currentState  = chg;
+						a.Update(handPath);
 						state.changedSinceLastSync = true;
 						state.lastChangeTime = mPredictedTime;
 					}
@@ -756,9 +793,7 @@ struct Layer
 					if(hand.ignoreDefault)
 					{
 						XrActionStateFloat &state = a.floatState[handPath];
-						static float chg = 0;
-						chg = fmodf(chg + 0.01f,1.0f);
-						state.currentState  = chg;
+						a.Update(handPath);
 						state.changedSinceLastSync = true;
 						state.lastChangeTime = mPredictedTime;
 					}
@@ -776,9 +811,7 @@ struct Layer
 					if(hand.ignoreDefault)
 					{
 						XrActionStateVector2f &state = a.vec2State[handPath];
-						static float chg = 0;
-						chg = fmodf(chg + 0.01f,1.0f);
-						state.currentState  = {chg,0};
+						a.Update(handPath);
 						state.changedSinceLastSync = true;
 						state.lastChangeTime = mPredictedTime;
 					}
