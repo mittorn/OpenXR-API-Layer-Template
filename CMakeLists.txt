@@ -4,7 +4,7 @@
 #
 # Initial Author: Arthur Brainville <ybalrid@ybalrid.info>
 
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.12)
 
 #To configure the layer name, description and output name, change these variables
 project(OpenXR-layer-template)
@@ -46,7 +46,7 @@ if(WIN32)
 	endif()
 else()
 	set(library_filename "../lib${library_name}.so")
-	set(CMAKE_SHARED_LINKER_FLAGS "-Wl,--no-undefined")
+	set(CMAKE_SHARED_LINKER_FLAGS "-Wl,--no-undefined -pthread")
 endif(WIN32)
 
 configure_file(
