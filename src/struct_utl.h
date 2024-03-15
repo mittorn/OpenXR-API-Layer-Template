@@ -101,7 +101,7 @@ constexpr const auto GetEN1(size_t off)
 	return TN(FUNCNAME,constformat.enum_leading_junk, constformat.enum_trailing_junk + 1);
 }
 template <typename T, T e>
-constexpr auto EN_v = GetEN1<T,e>(0);
+constexpr static auto EN_v = GetEN1<T,e>(0);
 
 // skip string copy, just pass pointer. String is not cut
 template <typename T>
@@ -158,7 +158,7 @@ forceinline static inline const char *StringifyEnum(T val)
 template<typename T, T e = (T)0, T maxe = (T)255, T def = (T)0, size_t missing = 0>
 forceinline static inline T UnstringifyEnum(const char *name)
 {
-	constexpr size_t len1 = GetTN2<T>().funclen + 1;
+	constexpr size_t len1 = TN_d<T>.funclen + 1;
 	constexpr auto d = GetEN2<T,e>(constformat.enum_type_mult * len1);
 	if constexpr(missing > 16)
 		return def;
@@ -199,10 +199,7 @@ template<typename... Ts> struct MakeVoid { typedef void t; };
 
 template <typename T, typename V, typename Seq = ISeq<>, typename = void>
 struct ConstructorVisitor : Seq {
-
 	constexpr static int size = 0;
-	void Fill(T *t, V &v, int s){}
-	void Construct(V &v, int s){}
 };
 
 struct StubPlacementNew{void *t;};
@@ -217,26 +214,26 @@ struct ConstructorVisitor<
 	using Base = ConstructorVisitor<T,V,ISeq<Indices..., sizeof...(Indices)>>;
 	constexpr static int size = 1 + Base::size;
 
-	void Fill(T *t, V &v, int s = size)
+	forceinline void Fill(T *t, V &v)
 	{
-		if(sizeof...(Indices) == s - 1)
+		if constexpr(size == 1)
 		{
 			t->~T();
-			new(StubPlacementNew{t})T{(v.SetIndex(Indices),v)...,(v.SetIndex(s - 1),v)};
+			new(StubPlacementNew{t})T{(v.SetIndex(Indices),v)...,(v.SetIndex(sizeof...(Indices)),v)};
 			v.End(sizeof(T));
 		}
-		else
-			Base::Fill(t, v, s);
+		else if constexpr(size > 1)
+			Base::Fill(t, v);
 	}
-	void Construct(V &v, int s = size)
+	forceinline void Construct(V &v)
 	{
-		if(sizeof...(Indices) == s - 1)
+		if constexpr(size == 1)
 		{
-			(void)T{(v.SetIndex(Indices),v)...,(v.SetIndex(s - 1),v)};
+			(void)T{(v.SetIndex(Indices),v)...,(v.SetIndex(sizeof...(Indices)),v)};
 			v.End(sizeof(T));
 		}
-		else
-			Base::Construct(v, s);
+		else if constexpr(size > 1)
+			Base::Construct(v);
 	}
 };
 
@@ -263,7 +260,6 @@ struct GenericReflect
 	void SetIndex(int idx){
 		index = idx;
 	}
-	//template<typename T>
 	void Flush(const char *type, size_t off, size_t size)
 	{
 		if(chars_len)
@@ -326,30 +322,7 @@ struct GenericReflect
 		}
 		else if constexpr(is_numeric && !is_pointer && !is_void_pointer)
 		{
-			if constexpr(sizeof(T) == 1)
-			{
-				const unsigned char c = *(const unsigned char*)(base + off);
-				if(c == 0)
-				{
-					if(chars_len)
-						Flush(TypeName<T>(),(int)off, (int)sizeof(T));
-					zeroes_len++;
-				}
-				else if(c >= 32)
-				{
-					if(zeroes_len)
-						Flush(TypeName<T>(),(int)off, (int)sizeof(T));
-					if(chars_len < 255)
-						buffer_chars[chars_len++] = c;
-				}
-				else if(chars_len || zeroes_len)
-				{
-					Flush(TypeName<T>(),(int)off, (int)sizeof(T));
-				}
-				else
-					snprintf(&buffer[len], 256 - len, "%02X ", c);
-			}
-			else if constexpr(((T)0.1f) != (T)0.0f)
+			if constexpr(((T)0.1f) != (T)0.0f)
 			{
 				snprintf(&buffer[len], 256 - len, "%f ", (double)*(T*)(base + off));
 			}
@@ -383,6 +356,39 @@ struct GenericReflect
 #endif
 	}
 
+	operator char()
+	{
+		if(index == 0)
+		{
+			off = off2 = 0;
+		}
+		if(last_typename != &TypeName<char>)
+		Flush("char",(int)off, 1);
+		const unsigned char c = *(const unsigned char*)(base + off);
+		if(c == 0)
+		{
+			if(chars_len)
+				Flush("char",(int)off, 1);
+			zeroes_len++;
+		}
+		else if(c >= 32)
+		{
+			if(zeroes_len)
+				Flush("char",(int)off, 1);
+			if(chars_len < 255)
+				buffer_chars[chars_len++] = c;
+		}
+		else if(chars_len || zeroes_len)
+		{
+			Flush("char",(int)off, 1);
+		}
+		else
+			snprintf(&buffer[len], 256 - len, "%02X ", c);
+		len = strlen(buffer);
+		last_typename = &TypeName<char>;
+		off++;
+		return 0;
+	}
 };
 
 template <typename T>
