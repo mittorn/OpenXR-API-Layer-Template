@@ -18,19 +18,18 @@
 #include "struct_utl.h"
 #include "ini_parser.h"
 #include <unistd.h>
-#define Log(...) FPrint(stderr, __VA_ARGS__)
+#ifdef QTCREATOR_SUCKS
+}
+#endif
 
-//Define next function pointer
-#define DECLARE_NEXT_FUNC(x) PFN_##x nextLayer_##x
-//Load next function pointer
-#define LOAD_NEXT_FUNC(x) nextLayer_xrGetInstanceProcAddr(mInstance, #x, (PFN_xrVoidFunction*)&nextLayer_##x)
+#if 1
+#define Log(...) FPrint(stderr, __VA_ARGS__);
 enum EventType{
 	EVENT_NULL,
 	EVENT_POLL_INTERACTION_PROFILE_CHANGED,
 	EVENT_POLL_RELOAD_CONFIG,
 	EVENT_ACTION_BOOL,
 };
-
 
 union PollEvent{
 	EventType type;
@@ -86,6 +85,8 @@ struct ConfigLoader
 	void End(size_t size){}
 };
 
+
+
 struct SectionHeader_
 {
 	const char *name = nullptr;
@@ -97,7 +98,7 @@ struct SectionHeader_
 };
 #define SectionHeader(PREFIX) \
 	constexpr static const char * prefix = #PREFIX; \
-	SectionHeader_ h
+	SectionHeader_ h;
 
 template <typename S>
 struct Sections
@@ -144,6 +145,7 @@ struct Sections
 	}
 };
 
+
 template <typename S, const auto &NAME>
 struct SectionReference_
 {
@@ -174,7 +176,7 @@ struct SectionReference_
 };
 #define SectionReference(type,name) \
 constexpr static const char *opt_name_##name = #name; \
-	SectionReference_<type, opt_name_##name> name
+	SectionReference_<type, opt_name_##name> name;
 
 
 template <typename T, const auto &NAME>
@@ -199,7 +201,9 @@ struct Option_
 };
 #define Option(type,name) \
 	constexpr static const char *opt_name_##name = #name; \
-	Option_<type, opt_name_##name> name
+	Option_<type, opt_name_##name> name;
+
+
 
 template <const auto &NAME>
 struct StringOption_
@@ -227,7 +231,7 @@ struct StringOption_
 
 #define StringOption(name) \
 constexpr static const char *opt_name_##name = #name; \
-	StringOption_<opt_name_##name> name
+	StringOption_<opt_name_##name> name;
 
 #define IsDelim(c) (!(c) || ((c) == ' '|| (c) == ','))
 static size_t GetEnum(const char *scheme, const char *val)
@@ -288,22 +292,27 @@ struct EnumOption_
 	}; \
 	constexpr static const char *name ## _name = #name; \
 	constexpr static const char *name ## _scheme = #__VA_ARGS__; \
-	EnumOption_<name ## _enum, name ## _name, name ## _scheme> name
-
+	EnumOption_<name ## _enum, name ## _name, name ## _scheme> name;
 
 struct SourceSection
 {
 	SectionHeader(source);
 	EnumOption(sourceType, remap, server);
+	EnumOption(actionType, action_bool, action_float, action_vector2);
 	StringOption(path);
-	Option(float, minIn);
-	Option(float, maxIn);
-	Option(float, minOut);
-	Option(float, maxOut);
+	Option(float, minXIn);
+	Option(float, maxXIn);
+	Option(float, minXOut);
+	Option(float, maxXOut);
+	Option(float, minYIn);
+	Option(float, maxYIn);
+	Option(float, minYOut);
+	Option(float, maxYOut);
 	Option(float, threshold);
 	Option(int, transformFunc);
 
 };
+
 struct BindingProfileSection;
 struct ActionMapSection
 {
@@ -312,17 +321,44 @@ struct ActionMapSection
 	// TODO: RPN or something similar
 	SectionReference(SourceSection, axis1);
 	SectionReference(SourceSection, axis2);
-	SectionReference(SourceSection, axis3);
 	EnumOption(customAction, reloadSettings, changeProfile, triggerInteractionChange);
 	SectionReference(BindingProfileSection, profileName);
 };
+
+static constexpr const char *const gszUserSuffixes[] =
+{
+	"left",
+	"right",
+	"head",
+	"gamepad",
+	//"/user/treadmill"
+};
+
+
+enum eUserPaths{
+	USER_HAND_LEFT = 0,
+	USER_HAND_RIGHT,
+	USER_HEAD,
+	USER_GAMEPAD,
+	USER_INVALID,
+	USER_PATH_COUNT
+};
+
+static int PathIndexFormSuffix(const char *suffix)
+{
+	int i;
+	for(int i = 0; i < USER_INVALID; i++)
+		if(!strcmp(suffix, gszUserSuffixes[i]))
+			break;
+	return i;
+}
 
 struct BindingProfileSection
 {
 	SectionHeader(bindings);
 	StringOption(overrideInteractionProfile);
 	struct DynamicActionMaps {
-		HashMap<const char *, ActionMapSection*> maps;
+		HashMap<const char *, ActionMapSection*> maps[USER_PATH_COUNT];
 		DynamicActionMaps(){}
 		DynamicActionMaps(const DynamicActionMaps &other) = delete;
 		DynamicActionMaps& operator=(const DynamicActionMaps &) = delete;
@@ -346,14 +382,26 @@ struct BindingProfileSection
 					ActionMapSection *map = (ActionMapSection *)l.parsedSecions[n->k];
 					if(!map)
 						continue;
-					maps[l.CurrentSection->table[i][j].k] = map;
+					const char *suffix = strchr(l.CurrentSection->table[i][j].k, '.');
+					if(suffix)
+					{
+						char str[suffix - l.CurrentSection->table[i][j].k];
+						memcpy(str, l.CurrentSection->table[i][j].k, suffix - l.CurrentSection->table[i][j].k);
+						suffix++;
+						maps[PathIndexFormSuffix(suffix)][str] = map;
+					}
+					else
+					{
+						maps[USER_HAND_LEFT][l.CurrentSection->table[i][j].k] = map;
+						maps[USER_HAND_RIGHT][l.CurrentSection->table[i][j].k] = map;
+					}
+
 					l.CurrentSection->table[i][j].v = nullptr;
 				}
 			}
 		}
 	} actionMaps;
 };
-
 struct Config
 {
 	// SectionHeader name
@@ -390,30 +438,47 @@ static void LoadConfig(Config *c)
 	Log("OverrideInteractionProfile %s\n", (const char*)c->overrideInteractionProfile);
 }
 
+
+
+//Define next function pointer
+#define DECLARE_NEXT_FUNC(x) PFN_##x nextLayer_##x
+//Load next function pointer
+#define LOAD_NEXT_FUNC(x) nextLayer_xrGetInstanceProcAddr(mInstance, #x, (PFN_xrVoidFunction*)&nextLayer_##x)
+
+
+#endif
+
+static float GetBoolAction(void *priv, int act, int hand, int ax);
+static float GetFloatAction(void *priv, int act, int hand, int ax);
+static float GetVec2Action(void *priv, int act, int hand, int ax);
+constexpr float (*actionFuncs[4])(void *priv, int act, int hand, int ax) =
+{
+	GetBoolAction,
+	GetFloatAction,
+	GetVec2Action
+};
+
 struct Layer
 {
+
 	// maximum active instances loaded in class
 	// normally it should be 1, but reserve more in case some library checks OpenXR
 	constexpr static size_t max_instances = 4;
 	static Layer mInstances[max_instances];
 
+
 	// Only handle this XrInatance in this object
 	XrInstance mInstance = XR_NULL_HANDLE;
 	XrSession mActiveSession = XR_NULL_HANDLE;
+
 	EventPoller poller;
 
 	// Extensions list
 	const char **mExtensions;
 	uint32_t mExtensionsCount;
 
-	enum eUserPaths{
-		USER_HAND_LEFT = 0,
-		USER_HAND_RIGHT,
-		USER_HEAD,
-		USER_GAMEPAD,
-		USER_INVALID,
-		USER_PATH_COUNT
-	};
+	Config config = {};
+
 
 	static constexpr const char *const mszUserPaths[] =
 	{
@@ -449,7 +514,7 @@ struct Layer
 	NEXT_FUNC(f, xrGetActionStateFloat); \
 	NEXT_FUNC(f, xrGetActionStateVector2f); \
 	NEXT_FUNC(f, xrSyncActions); \
-	NEXT_FUNC(f, xrWaitFrame);
+	NEXT_FUNC(f, xrWaitFrame)
 
 	NEXT_FUNC_LIST(DECLARE_NEXT_FUNC);
 
@@ -472,21 +537,22 @@ struct Layer
 	// custom action set or server app should write data here
 	struct ActionSource
 	{
+		int actionIndex;
+		int funcIndex;
+		int axisIndex;
+		int handIndex;
 		//SourceSection *mpConfig;
 		void *priv;
-		float (*func)(void *priv);
 		float GetValue()
 		{
-			if(func)
-				return func(priv);
-			return 0;
+			return actionFuncs[funcIndex](priv, actionIndex, handIndex, axisIndex);
 		}
 	};
 
 	struct ActionMap
 	{
 		//ActionMapSection *mpConfig;
-		ActionSource src[3];
+		ActionSource src[2];
 		float GetAxis(int axis)
 		{
 			// todo: actual axis mapping and calculations should be done here?
@@ -544,9 +610,17 @@ struct Layer
 		XrSessionCreateInfo info = { XR_TYPE_UNKNOWN };
 		XrActionSet *mActionSets = nullptr;
 		size_t mActionSetsCount = 0;
+
+		// application actions
 		HashArrayMap<XrAction, ActionBoolean> mActionsBoolean;
 		HashArrayMap<XrAction, ActionFloat> mActionsFloat;
 		HashArrayMap<XrAction, ActionVec2> mActionsVec2;
+
+		// layer actions
+		GrowArray<ActionBoolean> mLayerActionsBoolean;
+		GrowArray<ActionFloat> mLayerActionsFloat;
+		GrowArray<ActionVec2> mLayerActionsVec2;
+
 		~SessionState()
 		{
 			delete[] mActionSets;
@@ -572,11 +646,16 @@ struct Layer
 		GrowArray<Action> mActions;
 	};
 	HashMap<XrActionSet, ActionSet> gActionSetInfos;
+	ActionSet mLayerActionSet;
+	XrActionSet mhLayerActionSet;
+	HashArrayMap<const char *, int> mLayerActionIndexes;
+	bool mfLayerActionSetSuggested = false;
 
 	HashMap<XrSession, SessionState> mSessions;
 	SessionState *mpActiveSession;
 	// must be session-private, but always need most recent
 	XrTime mPredictedTime;
+
 
 	XrResult noinline thisLayer_xrCreateSession(XrInstance instance, const XrSessionCreateInfo *createInfo, XrSession *session)
 	{
@@ -599,7 +678,38 @@ struct Layer
 		mSessions.Remove(session);
 		return nextLayer_xrDestroySession(session);
 	}
-	Config config = {};
+	void InitLayerActionSet()
+	{
+		if( mhLayerActionSet )
+			return;
+		XrActionSetCreateInfo &asInfo = mLayerActionSet.info;
+		asInfo.type = XR_TYPE_ACTION_SET_CREATE_INFO;
+		strcpy( asInfo.actionSetName, "LayerActionSet");
+		strcpy( asInfo.localizedActionSetName, "LayerActionSet");
+		asInfo.priority = 0;
+		xrCreateActionSet(mInstance, &asInfo, &mhLayerActionSet);
+		mfLayerActionSetSuggested = false;
+		for(int i = 0; i < config.sources.mSections.TblSize; i++)
+		{
+			for(auto *node = config.sources.mSections.table[i]; node; node = node->n)
+			{
+				if(node->v.sourceType == SourceSection::remap)
+				{
+					mLayerActionSet.mActions.Add({});
+					Action &act = mLayerActionSet.mActions[mLayerActionSet.mActions.count - 1];
+					XrActionCreateInfo &info = act.info;
+					info.type = XR_TYPE_ACTION_CREATE_INFO;
+					info.actionType = (XrActionType)(int)node->v.actionType;
+					info.countSubactionPaths = USER_HEAD;
+					info.subactionPaths = mUserPaths;
+					strncpy(info.localizedActionName, node->v.h.name, sizeof(info.localizedActionName) - 1);
+					strncpy(info.actionName, node->v.h.name + sizeof("[sources"), strlen(node->v.h.name) - sizeof("[sources]"));
+					xrCreateAction(mhLayerActionSet, &info, &act.action);
+					mLayerActionIndexes[node->v.h.name] = mLayerActionSet.mActions.count - 1;
+				}
+			}
+		}
+	}
 
 	// Connect this layer to new XrInstance
 	void Initialize(XrInstance inst, PFN_xrGetInstanceProcAddr gpa, const char**exts, uint32_t extcount )
@@ -661,7 +771,7 @@ struct Layer
 
 			ActionSet &as = gActionSetInfos[acts];
 			as.info = *info;
-			as.instance = instance;
+			//as.instance = instance;
 		}
 		return r;
 	}
@@ -751,6 +861,28 @@ struct Layer
 
 		XrResult res = nextLayer_xrWaitFrame(session, frameWaitInfo, frameState);
 		mPredictedTime = frameState->predictedDisplayTime;
+		if(unlikely(!mpActiveSession && mActiveSession == session))
+		{
+			mpActiveSession = mSessions.GetPtr(session);
+			if(!mpActiveSession)
+				return res;
+			mActiveSession = session;
+		}
+		XrActionsSyncInfo syncInfo = {XR_TYPE_ACTIONS_SYNC_INFO};
+		syncInfo.countActiveActionSets = 1;
+		XrActiveActionSet as = {mhLayerActionSet, XR_NULL_PATH};
+		syncInfo.activeActionSets = &as;
+		nextLayer_xrSyncActions(session, &syncInfo);
+		for(int i = 0; i < mpActiveSession->mLayerActionsBoolean.count; i++)
+		{
+			for(int hand = 0; hand < 2; hand++)
+			{
+				XrActionStateGetInfo getInfo = {XR_TYPE_ACTION_STATE_GET_INFO};
+				getInfo.action = mpActiveSession->mLayerActionsBoolean[i].action;
+				getInfo.subactionPath = mUserPaths[hand];
+				nextLayer_xrGetActionStateBoolean(session, &getInfo, &mpActiveSession->mLayerActionsBoolean[i].boolState[hand]);
+			}
+		}
 		return res;
 	}
 
@@ -850,10 +982,10 @@ struct Layer
 						nextLayer_xrGetInputSourceLocalizedName(session, &linfo, slen + 1, &slen, str);
 						Log("Description %s\n", (char*)str);
 					}
-					nextLayer_xrPathToString(seti.instance, paths[j], 0, &slen, NULL);
+					nextLayer_xrPathToString(mInstance, paths[j], 0, &slen, NULL);
 					{
 						char str[slen + 1];
-						nextLayer_xrPathToString(seti.instance, paths[j], slen + 1, &slen, str);
+						nextLayer_xrPathToString(mInstance, paths[j], slen + 1, &slen, str);
 						Log("raw_path %s\n", (char*)str);
 					}
 				}
@@ -861,9 +993,98 @@ struct Layer
 		}
 	}
 
+	void InitProfile(SessionState &w, BindingProfileSection *p)
+	{
+		w.mActionsBoolean.~HashArrayMap();// = {};
+		w.mActionsFloat.~HashArrayMap();// = {};
+		w.mActionsVec2.~HashArrayMap();// = {};
+		w.mLayerActionsBoolean.~GrowArray();// = {};
+		w.mLayerActionsFloat.~GrowArray();// = {};
+		w.mLayerActionsVec2.~GrowArray();// = {};
+		HashArrayMap<const char*, int> boolIndexes{};
+		HashArrayMap<const char*, int> floatIndexes{};
+		HashArrayMap<const char*, int> vec2Indexes{};
+		for(int i = 0; i < w.mActionSetsCount; i++)
+		{
+			ActionSet &set = gActionSetInfos[w.mActionSets[i]];
+			for(int j = 0; j < set.mActions.count; j++)
+			{
+				Action &a = set.mActions[j];
+				for(int i = 0; i < USER_PATH_COUNT; i++)
+				{
+					ActionMapSection *s = p->actionMaps.maps[i][a.info.actionName];
+					if(s)
+					{
+						if(s->axis1.ptr)
+						{
+							if(s->axis1.ptr->actionType == SourceSection::action_bool)
+							{
+								int &idx = boolIndexes[s->axis1.ptr->h.name];
+								if(!idx)
+								{
+									idx = w.mLayerActionsBoolean.count;
+									w.mLayerActionsBoolean.Add({mLayerActionSet.mActions[mLayerActionIndexes[s->axis1.ptr->h.name]]});
+								}
+								a.baseState[i].map.src[0].actionIndex = idx;
+								a.baseState[i].map.src[0].funcIndex = 0;
+								a.baseState[i].map.src[0].priv = &w;
+								a.baseState[i].map.src[0].axisIndex = 0;
+								a.baseState[i].ignoreDefault = true;
+							}
+						}
+					}
+				}
+				switch(a.info.actionType)
+				{
+					case XR_ACTION_TYPE_BOOLEAN_INPUT:
+					{
+						ActionBoolean &ab = w.mActionsBoolean[a.action];
+						*(Action*)&ab = a;
+						for(int i = 0; i < USER_PATH_COUNT; i++)
+						{
+							ab.boolState[i].type = XR_TYPE_ACTION_STATE_BOOLEAN;
+							ab.boolState[i].isActive = true;
+						}
+						break;
+					}
+					case XR_ACTION_TYPE_FLOAT_INPUT:
+					{
+						ActionFloat &af = w.mActionsFloat[a.action];
+						*(Action*)&af = a;
+						for(int i = 0; i < USER_PATH_COUNT; i++)
+						{
+							af.floatState[i].type = XR_TYPE_ACTION_STATE_FLOAT;
+							af.floatState[i].isActive = true;
+						}
+						break;
+					}
+					case XR_ACTION_TYPE_VECTOR2F_INPUT:
+					{
+						ActionVec2 &af = w.mActionsVec2[a.action];
+						*(Action*)&af = a;
+						for(int i = 0; i < USER_PATH_COUNT; i++)
+						{
+							af.vec2State[i].type = XR_TYPE_ACTION_STATE_VECTOR2F;
+							af.vec2State[i].isActive = true;
+						}
+						break;
+					}
+					default:
+						break;
+				}
+			}
+		}
+	}
+
 	XrResult noinline thisLayer_xrAttachSessionActionSets (XrSession session, const XrSessionActionSetsAttachInfo *info)
 	{
-		XrResult r = nextLayer_xrAttachSessionActionSets(session, info);
+		XrSessionActionSetsAttachInfo newInfo = *info;
+		newInfo.countActionSets++;
+		XrActionSet newActionSets[newInfo.countActionSets];
+		memcpy(newActionSets, info->actionSets, info->countActionSets * sizeof(XrActionSet));
+		newActionSets[info->countActionSets] = mhLayerActionSet;
+		newInfo.actionSets = newActionSets;
+		XrResult r = nextLayer_xrAttachSessionActionSets(session, &newInfo);
 		if(r == XR_SUCCESS)
 		{
 			SessionState &w = GetSession(session);
@@ -878,51 +1099,8 @@ struct Layer
 				XrActionSet s = info->actionSets[i];
 				w.mActionSets[i] = s;
 				DumpActionSet(session,s);
-				ActionSet &set = gActionSetInfos[s];
-				for(int j = 0; j < set.mActions.count; j++)
-				{
-					Action &a = set.mActions[j];
-					switch(a.info.actionType)
-					{
-						case XR_ACTION_TYPE_BOOLEAN_INPUT:
-						{
-							ActionBoolean &ab = w.mActionsBoolean[a.action];
-							*(Action*)&ab = a;
-							for(int i = 0; i < USER_PATH_COUNT; i++)
-							{
-								ab.boolState[i].type = XR_TYPE_ACTION_STATE_BOOLEAN;
-								ab.boolState[i].isActive = true;
-							}
-							break;
-						}
-						case XR_ACTION_TYPE_FLOAT_INPUT:
-						{
-							ActionFloat &af = w.mActionsFloat[a.action];
-							*(Action*)&af = a;
-							for(int i = 0; i < USER_PATH_COUNT; i++)
-							{
-								af.floatState[i].type = XR_TYPE_ACTION_STATE_FLOAT;
-								af.floatState[i].isActive = true;
-							}
-							break;
-						}
-						case XR_ACTION_TYPE_VECTOR2F_INPUT:
-						{
-							ActionVec2 &af = w.mActionsVec2[a.action];
-							*(Action*)&af = a;
-							for(int i = 0; i < USER_PATH_COUNT; i++)
-							{
-								af.vec2State[i].type = XR_TYPE_ACTION_STATE_VECTOR2F;
-								af.vec2State[i].isActive = true;
-							}
-							break;
-						}
-						default:
-							break;
-					}
-				}
 			}
-
+			InitProfile(w, config.startupProfile.ptr);
 		}
 		return r;
 	}
@@ -1006,6 +1184,26 @@ struct Layer
 	}
 #endif
 };
+
+float GetBoolAction(void *priv, int act, int hand, int ax)
+{
+	Layer::SessionState *w = (Layer::SessionState *)priv;
+	return w->mLayerActionsBoolean[act].boolState[hand].currentState;
+}
+
+float GetFloatAction(void *priv, int act, int hand, int ax)
+{
+	Layer::SessionState *w = (Layer::SessionState *)priv;
+	return w->mLayerActionsFloat[act].floatState[hand].currentState;
+}
+
+float GetVec2Action(void *priv, int act, int hand, int ax)
+{
+	Layer::SessionState *w = (Layer::SessionState *)priv;
+	return ax?w->mLayerActionsVec2[act].vec2State[hand].currentState.y
+			: w->mLayerActionsVec2[act].vec2State[hand].currentState.x;
+}
+
 
 Layer Layer::mInstances[max_instances];
 
