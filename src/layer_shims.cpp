@@ -385,7 +385,7 @@ struct BindingProfileSection
 					const char *suffix = strchr(l.CurrentSection->table[i][j].k, '.');
 					if(suffix)
 					{
-						char str[suffix - l.CurrentSection->table[i][j].k];
+						char str[suffix - l.CurrentSection->table[i][j].k + 1] = "";
 						memcpy(str, l.CurrentSection->table[i][j].k, suffix - l.CurrentSection->table[i][j].k);
 						suffix++;
 						maps[PathIndexFormSuffix(suffix)][str] = map;
@@ -514,7 +514,8 @@ struct Layer
 	NEXT_FUNC(f, xrGetActionStateFloat); \
 	NEXT_FUNC(f, xrGetActionStateVector2f); \
 	NEXT_FUNC(f, xrSyncActions); \
-	NEXT_FUNC(f, xrWaitFrame)
+	NEXT_FUNC(f, xrWaitFrame); \
+	NEXT_FUNC(f, xrSuggestInteractionProfileBindings );
 
 	NEXT_FUNC_LIST(DECLARE_NEXT_FUNC);
 
@@ -571,6 +572,7 @@ struct Layer
 	{
 		XrActionCreateInfo info = { XR_TYPE_UNKNOWN };
 		XrAction action;
+		XrPath path;
 		ActionState baseState[USER_PATH_COUNT];
 	};
 
@@ -684,10 +686,10 @@ struct Layer
 			return;
 		XrActionSetCreateInfo &asInfo = mLayerActionSet.info;
 		asInfo.type = XR_TYPE_ACTION_SET_CREATE_INFO;
-		strcpy( asInfo.actionSetName, "LayerActionSet");
+		strcpy( asInfo.actionSetName, "layer_action_aet");
 		strcpy( asInfo.localizedActionSetName, "LayerActionSet");
 		asInfo.priority = 0;
-		xrCreateActionSet(mInstance, &asInfo, &mhLayerActionSet);
+		nextLayer_xrCreateActionSet(mInstance, &asInfo, &mhLayerActionSet);
 		mfLayerActionSetSuggested = false;
 		for(int i = 0; i < config.sources.mSections.TblSize; i++)
 		{
@@ -703,8 +705,9 @@ struct Layer
 					info.countSubactionPaths = USER_HEAD;
 					info.subactionPaths = mUserPaths;
 					strncpy(info.localizedActionName, node->v.h.name, sizeof(info.localizedActionName) - 1);
-					strncpy(info.actionName, node->v.h.name + sizeof("[sources"), strlen(node->v.h.name) - sizeof("[sources]"));
-					xrCreateAction(mhLayerActionSet, &info, &act.action);
+					strncpy(info.actionName, node->v.h.name + sizeof("[source"), strlen(node->v.h.name) - sizeof("[source]"));
+					nextLayer_xrCreateAction(mhLayerActionSet, &info, &act.action);
+					nextLayer_xrStringToPath(mInstance, node->v.path, &act.path);
 					mLayerActionIndexes[node->v.h.name] = mLayerActionSet.mActions.count - 1;
 				}
 			}
@@ -750,9 +753,7 @@ struct Layer
 		{
 			*action = act;
 
-			// test: animate grab_object action
-			bool ignore = !strcmp(info->actionName, "grab_object");
-			if(!gActionSetInfos[actionSet].mActions.Add({*info, act, {{false, false}, {ignore, false}}}))
+			if(!gActionSetInfos[actionSet].mActions.Add({*info, act}))
 			{
 				nextLayer_xrDestroyAction(act);
 				return XR_ERROR_OUT_OF_MEMORY;
@@ -861,6 +862,7 @@ struct Layer
 
 		XrResult res = nextLayer_xrWaitFrame(session, frameWaitInfo, frameState);
 		mPredictedTime = frameState->predictedDisplayTime;
+#if 0
 		if(unlikely(!mpActiveSession && mActiveSession == session))
 		{
 			mpActiveSession = mSessions.GetPtr(session);
@@ -868,27 +870,27 @@ struct Layer
 				return res;
 			mActiveSession = session;
 		}
-		XrActionsSyncInfo syncInfo = {XR_TYPE_ACTIONS_SYNC_INFO};
-		syncInfo.countActiveActionSets = 1;
-		XrActiveActionSet as = {mhLayerActionSet, XR_NULL_PATH};
-		syncInfo.activeActionSets = &as;
-		nextLayer_xrSyncActions(session, &syncInfo);
-		for(int i = 0; i < mpActiveSession->mLayerActionsBoolean.count; i++)
-		{
-			for(int hand = 0; hand < 2; hand++)
-			{
-				XrActionStateGetInfo getInfo = {XR_TYPE_ACTION_STATE_GET_INFO};
-				getInfo.action = mpActiveSession->mLayerActionsBoolean[i].action;
-				getInfo.subactionPath = mUserPaths[hand];
-				nextLayer_xrGetActionStateBoolean(session, &getInfo, &mpActiveSession->mLayerActionsBoolean[i].boolState[hand]);
-			}
-		}
+#endif
 		return res;
 	}
 
 	forceinline XrResult thisLayer_xrSyncActions(XrSession session, const XrActionsSyncInfo *syncInfo)
 	{
-		XrResult ret = nextLayer_xrSyncActions(session, syncInfo);
+
+		//XrResult ret = nextLayer_xrSyncActions(session, syncInfo);
+
+		XrActionsSyncInfo nsyncInfo = *syncInfo;//{XR_TYPE_ACTIONS_SYNC_INFO};
+		//nsyncInfo.countActiveActionSets = 1;
+		XrActiveActionSet as[syncInfo->countActiveActionSets + 1];
+		memcpy(as, syncInfo->activeActionSets, syncInfo->countActiveActionSets + sizeof(XrActiveActionSet));
+		as[syncInfo->countActiveActionSets].actionSet = mhLayerActionSet;
+		as[syncInfo->countActiveActionSets].subactionPath = XR_NULL_PATH;
+		nsyncInfo.activeActionSets = as;
+		nsyncInfo.countActiveActionSets = syncInfo->countActiveActionSets + 1;
+		//return res;
+
+		// todo: find out if it's openxr breaks second sync call or just monado broken
+		XrResult ret = nextLayer_xrSyncActions(session, &nsyncInfo);
 		if(unlikely(!mpActiveSession && mActiveSession == session))
 		{
 			mpActiveSession = mSessions.GetPtr(session);
@@ -896,6 +898,18 @@ struct Layer
 				return ret;
 			mActiveSession = session;
 		}
+		for(int i = 0; i < mpActiveSession->mLayerActionsBoolean.count; i++)
+		{
+			for(int hand = 0; hand < 2; hand++)
+			{
+				XrActionStateGetInfo getInfo = {XR_TYPE_ACTION_STATE_GET_INFO};
+				getInfo.action = mpActiveSession->mLayerActionsBoolean[i].action;
+				getInfo.subactionPath = mUserPaths[hand];
+				mpActiveSession->mLayerActionsBoolean[i].boolState[hand].type = XR_TYPE_ACTION_STATE_BOOLEAN;
+				nextLayer_xrGetActionStateBoolean(session, &getInfo, &mpActiveSession->mLayerActionsBoolean[i].boolState[hand]);
+			}
+		}
+
 		for(int i = 0; i < mpActiveSession->mActionsBoolean.TblSize; i++)
 		{
 			for(int j = 0; j < mpActiveSession->mActionsBoolean.table[i].count;j++)
@@ -1012,6 +1026,7 @@ struct Layer
 				Action &a = set.mActions[j];
 				for(int i = 0; i < USER_PATH_COUNT; i++)
 				{
+					a.baseState[i].ignoreDefault = false;
 					ActionMapSection *s = p->actionMaps.maps[i][a.info.actionName];
 					if(s)
 					{
@@ -1029,6 +1044,7 @@ struct Layer
 								a.baseState[i].map.src[0].funcIndex = 0;
 								a.baseState[i].map.src[0].priv = &w;
 								a.baseState[i].map.src[0].axisIndex = 0;
+								a.baseState[i].map.src[0].handIndex = 1;
 								a.baseState[i].ignoreDefault = true;
 							}
 						}
@@ -1074,6 +1090,23 @@ struct Layer
 				}
 			}
 		}
+	}
+	XrResult thisLayer_xrSuggestInteractionProfileBindings(XrInstance instance, const XrInteractionProfileSuggestedBinding *suggestedBindings)
+	{
+		InitLayerActionSet();
+		XrActionSuggestedBinding bindings[suggestedBindings->countSuggestedBindings + mLayerActionSet.mActions.count];
+		memcpy(bindings, suggestedBindings->suggestedBindings, suggestedBindings->countSuggestedBindings * sizeof(XrActionSuggestedBinding));
+		XrInteractionProfileSuggestedBinding newSuggestedBindings = *suggestedBindings;
+		newSuggestedBindings.countSuggestedBindings = suggestedBindings->countSuggestedBindings + mLayerActionSet.mActions.count;
+		newSuggestedBindings.suggestedBindings = bindings;
+		for(int i = 0; i < mLayerActionSet.mActions.count; i++ )
+		{
+			bindings[suggestedBindings->countSuggestedBindings + i].action = mLayerActionSet.mActions[i].action;
+			bindings[suggestedBindings->countSuggestedBindings + i].binding = mLayerActionSet.mActions[i].path;
+		}
+		mfLayerActionSetSuggested = true;
+		nextLayer_xrSuggestInteractionProfileBindings(instance, &newSuggestedBindings);
+		return XR_SUCCESS;
 	}
 
 	XrResult noinline thisLayer_xrAttachSessionActionSets (XrSession session, const XrSessionActionSetsAttachInfo *info)
@@ -1301,6 +1334,7 @@ XrResult thisLayer_xrGetInstanceProcAddr(XrInstance instance, const char* name, 
 	WRAP_FUNC(xrGetActionStateVector2f);
 	WRAP_FUNC(xrSyncActions);
 	WRAP_FUNC(xrWaitFrame);
+	WRAP_FUNC(xrSuggestInteractionProfileBindings);
 
 #if XR_THISLAYER_HAS_EXTENSIONS
 	if(Layer::mInstances[i].IsExtensionEnabled("XR_TEST_test_me"))
