@@ -250,7 +250,7 @@ static size_t GetEnum(const char *scheme, const char *val)
 			}
 			scheme++;
 		}
-		while(*scheme == *pval)scheme++, pval++;
+		while(*scheme && *scheme == *pval)scheme++, pval++;
 		if(IsDelim(*scheme) && !*pval)
 			return index;
 		if(!*scheme)
@@ -299,7 +299,9 @@ struct SourceSection
 	SectionHeader(source);
 	EnumOption(sourceType, remap, server);
 	EnumOption(actionType, action_bool, action_float, action_vector2);
+	// todo: bindings=/user/hand/left/input/grip/pose,/interaction_profiles/valve/index_controller:/user/hand/left/input/select/click
 	StringOption(path);
+	StringOption(profile);
 	Option(float, minXIn);
 	Option(float, maxXIn);
 	Option(float, minXOut);
@@ -321,6 +323,7 @@ struct ActionMapSection
 	// TODO: RPN or something similar
 	SectionReference(SourceSection, axis1);
 	SectionReference(SourceSection, axis2);
+	SectionReference(SourceSection, map);
 	EnumOption(customAction, reloadSettings, changeProfile, triggerInteractionChange);
 	SectionReference(BindingProfileSection, profileName);
 };
@@ -356,7 +359,6 @@ static int PathIndexFormSuffix(const char *suffix)
 struct BindingProfileSection
 {
 	SectionHeader(bindings);
-	StringOption(overrideInteractionProfile);
 	struct DynamicActionMaps {
 		HashMap<const char *, ActionMapSection*> maps[USER_PATH_COUNT];
 		DynamicActionMaps(){}
@@ -408,7 +410,7 @@ struct Config
 	Config(const Config &other) = delete;
 	Config& operator=(const Config &) = delete;
 	Option(int, serverPort);
-	StringOption(overrideInteractionProfile);
+	StringOption(interactionProfile);
 	Sections<SourceSection> sources;
 	Sections<ActionMapSection> actionMaps;
 	Sections<BindingProfileSection> bindings;
@@ -435,7 +437,6 @@ static void LoadConfig(Config *c)
 						Log("Section %s: unused config key %s = %s\n", node->k, node->v.table[j][k].k, node->v.table[j][k].v);
 
 	Log("ServerPort %d\n", (int)c->serverPort);
-	Log("OverrideInteractionProfile %s\n", (const char*)c->overrideInteractionProfile);
 }
 
 
@@ -554,6 +555,7 @@ struct Layer
 	{
 		//ActionMapSection *mpConfig;
 		ActionSource src[2];
+		int actionIndex = -1;
 		float GetAxis(int axis)
 		{
 			// todo: actual axis mapping and calculations should be done here?
@@ -563,7 +565,7 @@ struct Layer
 
 	struct ActionState
 	{
-		bool ignoreDefault = false;
+		bool hasAxisMapping = false;
 		bool trigger = false;
 		ActionMap map;
 	};
@@ -578,29 +580,29 @@ struct Layer
 
 	struct ActionBoolean : Action
 	{
-		XrActionStateBoolean boolState[USER_PATH_COUNT];
+		XrActionStateBoolean typedState[USER_PATH_COUNT];
 		void Update(int hand)
 		{
-			boolState[hand].currentState = baseState[hand].map.GetAxis(0);
+			typedState[hand].currentState = baseState[hand].map.GetAxis(0);
 		}
 	};
 
 	struct ActionFloat : Action
 	{
-		XrActionStateFloat floatState[USER_PATH_COUNT];
+		XrActionStateFloat typedState[USER_PATH_COUNT];
 		void Update(int hand)
 		{
-			floatState[hand].currentState = baseState[hand].map.GetAxis(0);
+			typedState[hand].currentState = baseState[hand].map.GetAxis(0);
 		}
 	};
 
 	struct ActionVec2 : Action
 	{
-		XrActionStateVector2f vec2State[USER_PATH_COUNT];
+		XrActionStateVector2f typedState[USER_PATH_COUNT];
 		void Update(int hand)
 		{
-			vec2State[hand].currentState.x = baseState[hand].map.GetAxis(0);
-			vec2State[hand].currentState.y = baseState[hand].map.GetAxis(1);
+			typedState[hand].currentState.x = baseState[hand].map.GetAxis(0);
+			typedState[hand].currentState.y = baseState[hand].map.GetAxis(1);
 		}
 	};
 
@@ -807,10 +809,10 @@ struct Layer
 				XrResult r = XR_SUCCESS;
 				int handPath = FindPath(getInfo->subactionPath);
 				ActionState &hand = a->baseState[handPath];
-				if(!hand.ignoreDefault)
+				if(!hand.hasAxisMapping)
 					r = nextLayer_xrGetActionStateBoolean(session, getInfo, state);
 				else
-					*state = a->boolState[handPath];
+					*state = a->typedState[handPath];
 				return r;
 			}
 		}
@@ -827,10 +829,10 @@ struct Layer
 				XrResult r = XR_SUCCESS;
 				int handPath = FindPath(getInfo->subactionPath);
 				ActionState &hand = a->baseState[handPath];
-				if(!hand.ignoreDefault)
+				if(!hand.hasAxisMapping)
 					r = nextLayer_xrGetActionStateFloat(session, getInfo, state);
 				else
-					*state = a->floatState[handPath];
+					*state = a->typedState[handPath];
 				return r;
 			}
 		}
@@ -847,10 +849,10 @@ struct Layer
 				XrResult r = XR_SUCCESS;
 				int handPath = FindPath(getInfo->subactionPath);
 				ActionState &hand = a->baseState[handPath];
-				if(!hand.ignoreDefault)
+				if(!hand.hasAxisMapping)
 					r = nextLayer_xrGetActionStateVector2f(session, getInfo, state);
 				else
-					*state = a->vec2State[handPath];
+					*state = a->typedState[handPath];
 				return r;
 			}
 		}
@@ -862,16 +864,33 @@ struct Layer
 
 		XrResult res = nextLayer_xrWaitFrame(session, frameWaitInfo, frameState);
 		mPredictedTime = frameState->predictedDisplayTime;
-#if 0
-		if(unlikely(!mpActiveSession && mActiveSession == session))
-		{
-			mpActiveSession = mSessions.GetPtr(session);
-			if(!mpActiveSession)
-				return res;
-			mActiveSession = session;
-		}
-#endif
 		return res;
+	}
+
+	template <typename A, typename L>
+	void UpdateActionState(A &a, L &array)
+	{
+		for(int handPath = 0; handPath < USER_PATH_COUNT; handPath++)
+		{
+			ActionState &hand = a.baseState[handPath];
+			auto &state = a.typedState[handPath];
+			if(hand.map.actionIndex >= 0)
+			{
+				// todo: axismap and map should have handIndex, not just SectionReference
+				// source should allow multiple bindings (possible need string list or even dict)
+				state = array[hand.map.actionIndex].typedState[0];
+			}
+			if(unlikely(hand.hasAxisMapping))
+			{
+				a.Update(handPath);
+				if(hand.map.actionIndex < 0)
+				{
+					// todo: detect change
+					state.changedSinceLastSync = true;
+					state.lastChangeTime = mPredictedTime;
+				}
+			}
+		}
 	}
 
 	forceinline XrResult thisLayer_xrSyncActions(XrSession session, const XrActionsSyncInfo *syncInfo)
@@ -905,65 +924,23 @@ struct Layer
 				XrActionStateGetInfo getInfo = {XR_TYPE_ACTION_STATE_GET_INFO};
 				getInfo.action = mpActiveSession->mLayerActionsBoolean[i].action;
 				getInfo.subactionPath = mUserPaths[hand];
-				mpActiveSession->mLayerActionsBoolean[i].boolState[hand].type = XR_TYPE_ACTION_STATE_BOOLEAN;
-				nextLayer_xrGetActionStateBoolean(session, &getInfo, &mpActiveSession->mLayerActionsBoolean[i].boolState[hand]);
+				mpActiveSession->mLayerActionsBoolean[i].typedState[hand].type = XR_TYPE_ACTION_STATE_BOOLEAN;
+				nextLayer_xrGetActionStateBoolean(session, &getInfo, &mpActiveSession->mLayerActionsBoolean[i].typedState[hand]);
 			}
 		}
 
 		for(int i = 0; i < mpActiveSession->mActionsBoolean.TblSize; i++)
-		{
 			for(int j = 0; j < mpActiveSession->mActionsBoolean.table[i].count;j++)
-			{
-				ActionBoolean &a = mpActiveSession->mActionsBoolean.table[i][j].v;
-				for(int handPath = 0; handPath < USER_PATH_COUNT; handPath++)
-				{
-					ActionState &hand = a.baseState[handPath];
-					if(hand.ignoreDefault)
-					{
-						XrActionStateBoolean &state = a.boolState[handPath];
-						a.Update(handPath);
-						state.changedSinceLastSync = true;
-						state.lastChangeTime = mPredictedTime;
-					}
-				}
-			}
-		}
+				UpdateActionState(mpActiveSession->mActionsBoolean.table[i][j].v, mpActiveSession->mLayerActionsBoolean);
+
 		for(int i = 0; i < mpActiveSession->mActionsFloat.TblSize; i++)
-		{
 			for(int j = 0; j < mpActiveSession->mActionsFloat.table[i].count;j++)
-			{
-				ActionFloat &a = mpActiveSession->mActionsFloat.table[i][j].v;
-				for(int handPath = 0; handPath < USER_PATH_COUNT; handPath++)
-				{
-					ActionState &hand = a.baseState[handPath];
-					if(hand.ignoreDefault)
-					{
-						XrActionStateFloat &state = a.floatState[handPath];
-						a.Update(handPath);
-						state.changedSinceLastSync = true;
-						state.lastChangeTime = mPredictedTime;
-					}
-				}
-			}
-		}
+				UpdateActionState(mpActiveSession->mActionsFloat.table[i][j].v, mpActiveSession->mLayerActionsFloat);
+
 		for(int i = 0; i < mpActiveSession->mActionsVec2.TblSize; i++)
-		{
 			for(int j = 0; j < mpActiveSession->mActionsVec2.table[i].count;j++)
-			{
-				ActionVec2 &a = mpActiveSession->mActionsVec2.table[i][j].v;
-				for(int handPath = 0; handPath < USER_PATH_COUNT; handPath++)
-				{
-					ActionState &hand = a.baseState[handPath];
-					if(hand.ignoreDefault)
-					{
-						XrActionStateVector2f &state = a.vec2State[handPath];
-						a.Update(handPath);
-						state.changedSinceLastSync = true;
-						state.lastChangeTime = mPredictedTime;
-					}
-				}
-			}
-		}
+				UpdateActionState(mpActiveSession->mActionsVec2.table[i][j].v, mpActiveSession->mLayerActionsVec2);
+
 		return ret;
 	}
 	void DumpActionSet(XrSession session, XrActionSet s)
@@ -1026,10 +1003,23 @@ struct Layer
 				Action &a = set.mActions[j];
 				for(int i = 0; i < USER_PATH_COUNT; i++)
 				{
-					a.baseState[i].ignoreDefault = false;
+					a.baseState[i].hasAxisMapping = false;
 					ActionMapSection *s = p->actionMaps.maps[i][a.info.actionName];
 					if(s)
 					{
+						if(s->map.ptr)
+						{
+							if(s->map.ptr->actionType == SourceSection::action_bool && a.info.actionType == XR_ACTION_TYPE_BOOLEAN_INPUT)
+							{
+								int &idx = boolIndexes[s->map.ptr->h.name];
+								if(!idx)
+								{
+									idx = w.mLayerActionsBoolean.count;
+									w.mLayerActionsBoolean.Add({mLayerActionSet.mActions[mLayerActionIndexes[s->map.ptr->h.name]]});
+								}
+								a.baseState[i].map.actionIndex = idx;
+							}
+						}
 						if(s->axis1.ptr)
 						{
 							if(s->axis1.ptr->actionType == SourceSection::action_bool)
@@ -1045,7 +1035,7 @@ struct Layer
 								a.baseState[i].map.src[0].priv = &w;
 								a.baseState[i].map.src[0].axisIndex = 0;
 								a.baseState[i].map.src[0].handIndex = 1;
-								a.baseState[i].ignoreDefault = true;
+								a.baseState[i].hasAxisMapping = true;
 							}
 						}
 					}
@@ -1058,8 +1048,8 @@ struct Layer
 						*(Action*)&ab = a;
 						for(int i = 0; i < USER_PATH_COUNT; i++)
 						{
-							ab.boolState[i].type = XR_TYPE_ACTION_STATE_BOOLEAN;
-							ab.boolState[i].isActive = true;
+							ab.typedState[i].type = XR_TYPE_ACTION_STATE_BOOLEAN;
+							ab.typedState[i].isActive = true;
 						}
 						break;
 					}
@@ -1069,8 +1059,8 @@ struct Layer
 						*(Action*)&af = a;
 						for(int i = 0; i < USER_PATH_COUNT; i++)
 						{
-							af.floatState[i].type = XR_TYPE_ACTION_STATE_FLOAT;
-							af.floatState[i].isActive = true;
+							af.typedState[i].type = XR_TYPE_ACTION_STATE_FLOAT;
+							af.typedState[i].isActive = true;
 						}
 						break;
 					}
@@ -1080,8 +1070,8 @@ struct Layer
 						*(Action*)&af = a;
 						for(int i = 0; i < USER_PATH_COUNT; i++)
 						{
-							af.vec2State[i].type = XR_TYPE_ACTION_STATE_VECTOR2F;
-							af.vec2State[i].isActive = true;
+							af.typedState[i].type = XR_TYPE_ACTION_STATE_VECTOR2F;
+							af.typedState[i].isActive = true;
 						}
 						break;
 					}
@@ -1221,20 +1211,20 @@ struct Layer
 float GetBoolAction(void *priv, int act, int hand, int ax)
 {
 	Layer::SessionState *w = (Layer::SessionState *)priv;
-	return w->mLayerActionsBoolean[act].boolState[hand].currentState;
+	return w->mLayerActionsBoolean[act].typedState[hand].currentState;
 }
 
 float GetFloatAction(void *priv, int act, int hand, int ax)
 {
 	Layer::SessionState *w = (Layer::SessionState *)priv;
-	return w->mLayerActionsFloat[act].floatState[hand].currentState;
+	return w->mLayerActionsFloat[act].typedState[hand].currentState;
 }
 
 float GetVec2Action(void *priv, int act, int hand, int ax)
 {
 	Layer::SessionState *w = (Layer::SessionState *)priv;
-	return ax?w->mLayerActionsVec2[act].vec2State[hand].currentState.y
-			: w->mLayerActionsVec2[act].vec2State[hand].currentState.x;
+	return ax?w->mLayerActionsVec2[act].typedState[hand].currentState.y
+			: w->mLayerActionsVec2[act].typedState[hand].currentState.x;
 }
 
 
