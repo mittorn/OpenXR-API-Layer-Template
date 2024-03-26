@@ -283,7 +283,8 @@ static size_t GetEnum(const char *scheme, const char *val)
 			return index;
 		if(!*scheme)
 			return 0;
-		scheme++;
+		while(!IsDelim(*scheme))
+			scheme++;
 	}
 }
 
@@ -375,10 +376,10 @@ enum eUserPaths{
 	USER_PATH_COUNT
 };
 
-static int PathIndexFormSuffix(const char *suffix)
+static int PathIndexFromSuffix(const char *suffix)
 {
 	int i;
-	for(int i = 0; i < USER_INVALID; i++)
+	for(i = 0; i < USER_INVALID; i++)
 		if(!strcmp(suffix, gszUserSuffixes[i]))
 			break;
 	return i;
@@ -418,7 +419,7 @@ struct BindingProfileSection
 						char str[suffix - l.CurrentSection->table[i][j].k + 1] = "";
 						memcpy(str, l.CurrentSection->table[i][j].k, suffix - l.CurrentSection->table[i][j].k);
 						suffix++;
-						maps[PathIndexFormSuffix(suffix)][str] = map;
+						maps[PathIndexFromSuffix(suffix)][str] = map;
 					}
 					else
 					{
@@ -595,7 +596,7 @@ struct Layer
 	struct ActionState
 	{
 		bool hasAxisMapping = false;
-		bool trigger = false;
+		bool override = false;
 		ActionMap map;
 	};
 
@@ -633,8 +634,6 @@ struct Layer
 			typedState[hand].currentState.y = baseState[hand].map.GetAxis(1);
 		}
 	};
-
-	//HashMap<XrAction, Action> mActionsOther;
 
 	struct SessionState
 	{
@@ -857,7 +856,7 @@ struct Layer
 				XrResult r = XR_SUCCESS;
 				int handPath = FindPath(getInfo->subactionPath);
 				ActionState &hand = a->baseState[handPath];
-				if(!hand.hasAxisMapping)
+				if(!hand.override)
 					r = nextLayer_xrGetActionStateBoolean(session, getInfo, state);
 				else
 					*state = a->typedState[handPath];
@@ -877,7 +876,7 @@ struct Layer
 				XrResult r = XR_SUCCESS;
 				int handPath = FindPath(getInfo->subactionPath);
 				ActionState &hand = a->baseState[handPath];
-				if(!hand.hasAxisMapping)
+				if(!hand.override)
 					r = nextLayer_xrGetActionStateFloat(session, getInfo, state);
 				else
 					*state = a->typedState[handPath];
@@ -897,7 +896,7 @@ struct Layer
 				XrResult r = XR_SUCCESS;
 				int handPath = FindPath(getInfo->subactionPath);
 				ActionState &hand = a->baseState[handPath];
-				if(!hand.hasAxisMapping)
+				if(!hand.override)
 					r = nextLayer_xrGetActionStateVector2f(session, getInfo, state);
 				else
 					*state = a->typedState[handPath];
@@ -974,6 +973,28 @@ struct Layer
 				getInfo.subactionPath = mUserPaths[hand];
 				mpActiveSession->mLayerActionsBoolean[i].typedState[hand].type = XR_TYPE_ACTION_STATE_BOOLEAN;
 				nextLayer_xrGetActionStateBoolean(session, &getInfo, &mpActiveSession->mLayerActionsBoolean[i].typedState[hand]);
+			}
+		}
+		for(int i = 0; i < mpActiveSession->mLayerActionsFloat.count; i++)
+		{
+			for(int hand = 0; hand < 2; hand++)
+			{
+				XrActionStateGetInfo getInfo = {XR_TYPE_ACTION_STATE_GET_INFO};
+				getInfo.action = mpActiveSession->mLayerActionsFloat[i].action;
+				getInfo.subactionPath = mUserPaths[hand];
+				mpActiveSession->mLayerActionsFloat[i].typedState[hand].type = XR_TYPE_ACTION_STATE_FLOAT;
+				nextLayer_xrGetActionStateFloat(session, &getInfo, &mpActiveSession->mLayerActionsFloat[i].typedState[hand]);
+			}
+		}
+		for(int i = 0; i < mpActiveSession->mLayerActionsVec2.count; i++)
+		{
+			for(int hand = 0; hand < 2; hand++)
+			{
+				XrActionStateGetInfo getInfo = {XR_TYPE_ACTION_STATE_GET_INFO};
+				getInfo.action = mpActiveSession->mLayerActionsVec2[i].action;
+				getInfo.subactionPath = mUserPaths[hand];
+				mpActiveSession->mLayerActionsFloat[i].typedState[hand].type = XR_TYPE_ACTION_STATE_VECTOR2F;
+				nextLayer_xrGetActionStateVector2f(session, &getInfo, &mpActiveSession->mLayerActionsVec2[i].typedState[hand]);
 			}
 		}
 
@@ -1055,56 +1076,63 @@ struct Layer
 					ActionMapSection *s = p->actionMaps.maps[i][a.info.actionName];
 					if(s)
 					{
+						a.baseState[i].override = true;
+						auto mapFromConfig = [this](const auto  &conf, auto &indexMap, auto &array, int &hand, int &action )
+						{
+							int &idx = indexMap[conf.ptr->h.name];
+							if(!idx)
+							{
+								idx = array.count + 1;
+								array.Add({mLayerActionSet.mActions[mLayerActionIndexes[conf.ptr->h.name]]});
+							}
+							if(conf.suffix)
+								hand = PathIndexFromSuffix(conf.suffix);
+							else if(conf.ptr->subactionOverride.val)
+							{
+								XrPath p;
+								nextLayer_xrStringToPath(mInstance, conf.ptr->subactionOverride.val, &p);
+								hand = FindPath(p);
+							}
+							else
+								hand = 1;
+							action = idx - 1;
+						};
+
 						if(s->map.ptr)
 						{
 							if(s->map.ptr->actionType == SourceSection::action_bool && a.info.actionType == XR_ACTION_TYPE_BOOLEAN_INPUT)
-							{
-								int &idx = boolIndexes[s->map.ptr->h.name];
-								if(!idx)
-								{
-									idx = w.mLayerActionsBoolean.count;
-									w.mLayerActionsBoolean.Add({mLayerActionSet.mActions[mLayerActionIndexes[s->map.ptr->h.name]]});
-								}
-								int hand = 1;
-								if(s->map.suffix)
-									hand = PathIndexFormSuffix(s->map.suffix);
-								else if(s->map.ptr->subactionOverride.val)
-								{
-									XrPath p;
-									nextLayer_xrStringToPath(mInstance, s->map.ptr->subactionOverride.val, &p);
-									hand = FindPath(p);
-								}
-								a.baseState[i].map.actionIndex = idx;
-								a.baseState[i].map.handIndex = hand;
-							}
+								mapFromConfig( s->map, boolIndexes, w.mLayerActionsBoolean, a.baseState[i].map.handIndex, a.baseState[i].map.actionIndex );
+							else if(s->map.ptr->actionType == SourceSection::action_float && a.info.actionType == XR_ACTION_TYPE_FLOAT_INPUT)
+								mapFromConfig( s->map, floatIndexes, w.mLayerActionsFloat, a.baseState[i].map.handIndex, a.baseState[i].map.actionIndex );
+							else if(s->map.ptr->actionType == SourceSection::action_vector2 && a.info.actionType == XR_ACTION_TYPE_VECTOR2F_INPUT)
+								mapFromConfig( s->map, vec2Indexes, w.mLayerActionsVec2, a.baseState[i].map.handIndex, a.baseState[i].map.actionIndex );
+							else
+								Log( "Invalid direct action map (types must be same): %s %s %s\n", s->h.name, s->map.suffix? s->map.suffix: "(auto)", s->map.ptr->h.name );
 						}
-						if(s->axis1.ptr)
+						auto axisFromConfig = [this](auto mapFromConfig, Action &a, int i, const auto &conf, int axis, SessionState &w, auto &boolIndexes, auto &floatIndexes, auto &vec2Indexes)
 						{
-							if(s->axis1.ptr->actionType == SourceSection::action_bool)
+							int t = conf.ptr->actionType;
+							if(t == SourceSection::action_bool)
+								mapFromConfig( conf, boolIndexes, w.mLayerActionsBoolean, a.baseState[i].map.src[axis].handIndex, a.baseState[i].map.src[axis].actionIndex );
+							else if(t == SourceSection::action_float)
+								mapFromConfig( conf, floatIndexes, w.mLayerActionsFloat, a.baseState[i].map.src[axis].handIndex, a.baseState[i].map.src[axis].actionIndex );
+							else if(t == SourceSection::action_vector2)
+								mapFromConfig( conf, vec2Indexes, w.mLayerActionsVec2, a.baseState[i].map.src[axis].handIndex, a.baseState[i].map.src[axis].actionIndex );
+							else
 							{
-								int &idx = boolIndexes[s->axis1.ptr->h.name];
-								if(!idx)
-								{
-									idx = w.mLayerActionsBoolean.count;
-									w.mLayerActionsBoolean.Add({mLayerActionSet.mActions[mLayerActionIndexes[s->axis1.ptr->h.name]]});
-								}
-								int hand = 1;
-								if(s->axis1.suffix)
-									hand = PathIndexFormSuffix(s->axis1.suffix);
-								else if(s->axis1.ptr->subactionOverride.val)
-								{
-									XrPath p;
-									nextLayer_xrStringToPath(mInstance, s->axis1.ptr->subactionOverride.val, &p);
-									hand = FindPath(p);
-								}
-								a.baseState[i].map.src[0].actionIndex = idx;
-								a.baseState[i].map.src[0].funcIndex = 0;
-								a.baseState[i].map.src[0].priv = &w;
-								a.baseState[i].map.src[0].axisIndex = 0;
-								a.baseState[i].map.src[0].handIndex = hand;
-								a.baseState[i].hasAxisMapping = true;
+								Log( "Invalid action type: axis%d %d %s %s\n", axis, t, conf.suffix?conf.suffix:"(auto)", conf.ptr->h.name );
+								t = 1;
 							}
-						}
+							a.baseState[i].map.src[axis].funcIndex = t - 1;
+							a.baseState[i].map.src[axis].priv = &w;
+							// todo: parse axis index? From suffix?
+							a.baseState[i].map.src[axis].axisIndex = 0;
+							a.baseState[i].hasAxisMapping = true;
+						};
+						if(s->axis1.ptr)
+							axisFromConfig(mapFromConfig, a, i, s->axis1, 0, w, boolIndexes, floatIndexes, vec2Indexes);
+						if(s->axis2.ptr)
+							axisFromConfig(mapFromConfig, a, i, s->axis2, 1, w, boolIndexes, floatIndexes, vec2Indexes);
 					}
 				}
 				switch(a.info.actionType)
