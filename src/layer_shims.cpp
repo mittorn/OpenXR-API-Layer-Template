@@ -72,6 +72,19 @@ struct EventPoller
 	}
 };
 
+// stringview-like
+struct SubString
+{
+	const char *begin, *end;
+};
+// fmt_util extension
+template<typename Buf>
+forceinline constexpr static inline void ConvertS(Buf &s, const SubString &arg)
+{
+	for(const char *str = arg.begin; str < arg.end;str++)
+		s.w(*str);
+}
+
 struct ConfigLoader
 {
 	HashArrayMap<const char*, const char*> *CurrentSection;
@@ -151,16 +164,29 @@ struct SectionReference_
 {
 	constexpr static const char *name = NAME;
 	S *ptr = 0;
+	const char *suffix = nullptr;
 	SectionReference_(const SectionReference_ &other) = delete;
 	SectionReference_& operator=(const SectionReference_ &) = delete;
 	SectionReference_(){}
+	~SectionReference_()
+	{
+		if(suffix)
+			free((void*)suffix);
+		suffix = nullptr;
+	}
 	SectionReference_(ConfigLoader &l)
 	{
 		const char *&str = (*l.CurrentSection)[name];
 		if(str)
 		{
 			char sectionName[256];
-			SBPrint(sectionName, "[%s.%s]", S::prefix, str);
+			SubString s{str};
+			s.end = strchr(str, '.');
+			if(!s.end)
+				s.end = s.begin + strlen(str);
+			else
+				suffix = strdup(s.end + 1);
+			SBPrint(sectionName, "[%s.%s]", S::prefix, s);
 			auto *n = l.parser.mDict.GetNode(sectionName);
 			if(!n)
 			{
@@ -209,7 +235,7 @@ template <const auto &NAME>
 struct StringOption_
 {
 	constexpr static const char *name = NAME;
-	char val[256] = "";
+	const char *val = nullptr;
 	operator const char *()
 	{
 		return val;
@@ -217,14 +243,16 @@ struct StringOption_
 	StringOption_(const StringOption_ &other) = delete;
 	StringOption_& operator=(const StringOption_ &) = delete;
 	StringOption_(){}
-	StringOption_(const char *def)
+	~StringOption_()
 	{
-		strncpy(val, def, sizeof(val)-1);
+		if(val)
+			free((void*)val);
+		val = nullptr;
 	}
 	StringOption_(ConfigLoader &l){
 		const char *&str = (*l.CurrentSection)[name];
 		if(str)
-			strncpy(val, str, sizeof(val)-1);
+			val = strdup(str);
 		str = nullptr;
 	}
 };
@@ -300,8 +328,8 @@ struct SourceSection
 	EnumOption(sourceType, remap, server);
 	EnumOption(actionType, action_bool, action_float, action_vector2);
 	// todo: bindings=/user/hand/left/input/grip/pose,/interaction_profiles/valve/index_controller:/user/hand/left/input/select/click
-	StringOption(path);
-	StringOption(profile);
+	StringOption(bindings);
+	StringOption(subactionOverride);
 	Option(float, minXIn);
 	Option(float, maxXIn);
 	Option(float, minXOut);
@@ -556,6 +584,7 @@ struct Layer
 		//ActionMapSection *mpConfig;
 		ActionSource src[2];
 		int actionIndex = -1;
+		int handIndex = 0;
 		float GetAxis(int axis)
 		{
 			// todo: actual axis mapping and calculations should be done here?
@@ -574,7 +603,6 @@ struct Layer
 	{
 		XrActionCreateInfo info = { XR_TYPE_UNKNOWN };
 		XrAction action;
-		XrPath path;
 		ActionState baseState[USER_PATH_COUNT];
 	};
 
@@ -653,6 +681,7 @@ struct Layer
 	ActionSet mLayerActionSet;
 	XrActionSet mhLayerActionSet;
 	HashArrayMap<const char *, int> mLayerActionIndexes;
+	HashMap<XrPath, GrowArray<XrActionSuggestedBinding>> mLayerSuggestedBindings;
 	bool mfLayerActionSetSuggested = false;
 
 	HashMap<XrSession, SessionState> mSessions;
@@ -692,6 +721,11 @@ struct Layer
 		strcpy( asInfo.localizedActionSetName, "LayerActionSet");
 		asInfo.priority = 0;
 		nextLayer_xrCreateActionSet(mInstance, &asInfo, &mhLayerActionSet);
+		XrPath defaultProfile;
+		const char *profile = config.interactionProfile.val;
+		if(!profile)
+			profile = "/interaction_profiles/khr/simple_controller";
+		nextLayer_xrStringToPath(mInstance, profile, &defaultProfile);
 		mfLayerActionSetSuggested = false;
 		for(int i = 0; i < config.sources.mSections.TblSize; i++)
 		{
@@ -704,12 +738,26 @@ struct Layer
 					XrActionCreateInfo &info = act.info;
 					info.type = XR_TYPE_ACTION_CREATE_INFO;
 					info.actionType = (XrActionType)(int)node->v.actionType;
-					info.countSubactionPaths = USER_HEAD;
-					info.subactionPaths = mUserPaths;
+					XrPath sub;
+					if(node->v.subactionOverride)
+					{
+						info.countSubactionPaths = 1;
+						nextLayer_xrStringToPath(mInstance, node->v.subactionOverride, &sub);
+						info.subactionPaths = &sub;
+					}
+					else
+					{
+						info.countSubactionPaths = USER_HEAD;
+						info.subactionPaths = mUserPaths;
+					}
 					strncpy(info.localizedActionName, node->v.h.name, sizeof(info.localizedActionName) - 1);
 					strncpy(info.actionName, node->v.h.name + sizeof("[source"), strlen(node->v.h.name) - sizeof("[source]"));
 					nextLayer_xrCreateAction(mhLayerActionSet, &info, &act.action);
-					nextLayer_xrStringToPath(mInstance, node->v.path, &act.path);
+					XrPath path;
+					XrPath profile = defaultProfile;
+					// todo: parse bindigns string as profile:bindign,profile:binding
+					nextLayer_xrStringToPath(mInstance, node->v.bindings, &path);
+					mLayerSuggestedBindings[profile].Add({act.action,path});
 					mLayerActionIndexes[node->v.h.name] = mLayerActionSet.mActions.count - 1;
 				}
 			}
@@ -878,7 +926,7 @@ struct Layer
 			{
 				// todo: axismap and map should have handIndex, not just SectionReference
 				// source should allow multiple bindings (possible need string list or even dict)
-				state = array[hand.map.actionIndex].typedState[0];
+				state = array[hand.map.actionIndex].typedState[hand.map.handIndex];
 			}
 			if(unlikely(hand.hasAxisMapping))
 			{
@@ -1017,7 +1065,17 @@ struct Layer
 									idx = w.mLayerActionsBoolean.count;
 									w.mLayerActionsBoolean.Add({mLayerActionSet.mActions[mLayerActionIndexes[s->map.ptr->h.name]]});
 								}
+								int hand = 1;
+								if(s->map.suffix)
+									hand = PathIndexFormSuffix(s->map.suffix);
+								else if(s->map.ptr->subactionOverride.val)
+								{
+									XrPath p;
+									nextLayer_xrStringToPath(mInstance, s->map.ptr->subactionOverride.val, &p);
+									hand = FindPath(p);
+								}
 								a.baseState[i].map.actionIndex = idx;
+								a.baseState[i].map.handIndex = hand;
 							}
 						}
 						if(s->axis1.ptr)
@@ -1030,11 +1088,20 @@ struct Layer
 									idx = w.mLayerActionsBoolean.count;
 									w.mLayerActionsBoolean.Add({mLayerActionSet.mActions[mLayerActionIndexes[s->axis1.ptr->h.name]]});
 								}
+								int hand = 1;
+								if(s->axis1.suffix)
+									hand = PathIndexFormSuffix(s->axis1.suffix);
+								else if(s->axis1.ptr->subactionOverride.val)
+								{
+									XrPath p;
+									nextLayer_xrStringToPath(mInstance, s->axis1.ptr->subactionOverride.val, &p);
+									hand = FindPath(p);
+								}
 								a.baseState[i].map.src[0].actionIndex = idx;
 								a.baseState[i].map.src[0].funcIndex = 0;
 								a.baseState[i].map.src[0].priv = &w;
 								a.baseState[i].map.src[0].axisIndex = 0;
-								a.baseState[i].map.src[0].handIndex = 1;
+								a.baseState[i].map.src[0].handIndex = hand;
 								a.baseState[i].hasAxisMapping = true;
 							}
 						}
@@ -1084,18 +1151,23 @@ struct Layer
 	XrResult thisLayer_xrSuggestInteractionProfileBindings(XrInstance instance, const XrInteractionProfileSuggestedBinding *suggestedBindings)
 	{
 		InitLayerActionSet();
-		XrActionSuggestedBinding bindings[suggestedBindings->countSuggestedBindings + mLayerActionSet.mActions.count];
-		memcpy(bindings, suggestedBindings->suggestedBindings, suggestedBindings->countSuggestedBindings * sizeof(XrActionSuggestedBinding));
-		XrInteractionProfileSuggestedBinding newSuggestedBindings = *suggestedBindings;
-		newSuggestedBindings.countSuggestedBindings = suggestedBindings->countSuggestedBindings + mLayerActionSet.mActions.count;
-		newSuggestedBindings.suggestedBindings = bindings;
-		for(int i = 0; i < mLayerActionSet.mActions.count; i++ )
+		auto *layerSuggest = mLayerSuggestedBindings.GetPtr(suggestedBindings->interactionProfile);
+		if(layerSuggest)
 		{
-			bindings[suggestedBindings->countSuggestedBindings + i].action = mLayerActionSet.mActions[i].action;
-			bindings[suggestedBindings->countSuggestedBindings + i].binding = mLayerActionSet.mActions[i].path;
+			XrActionSuggestedBinding bindings[suggestedBindings->countSuggestedBindings + mLayerActionSet.mActions.count];
+			memcpy(bindings, suggestedBindings->suggestedBindings, suggestedBindings->countSuggestedBindings * sizeof(XrActionSuggestedBinding));
+			XrInteractionProfileSuggestedBinding newSuggestedBindings = *suggestedBindings;
+			newSuggestedBindings.countSuggestedBindings = suggestedBindings->countSuggestedBindings + layerSuggest->count;
+			newSuggestedBindings.suggestedBindings = bindings;
+			for(int i = 0; i < layerSuggest->count; i++ )
+				bindings[suggestedBindings->countSuggestedBindings + i] = (*layerSuggest)[i];
+
+			mfLayerActionSetSuggested = true;
+			nextLayer_xrSuggestInteractionProfileBindings(instance, &newSuggestedBindings);
 		}
-		mfLayerActionSetSuggested = true;
-		nextLayer_xrSuggestInteractionProfileBindings(instance, &newSuggestedBindings);
+		else
+			nextLayer_xrSuggestInteractionProfileBindings(instance, suggestedBindings);
+
 		return XR_SUCCESS;
 	}
 
