@@ -379,8 +379,12 @@ enum eUserPaths{
 static int PathIndexFromSuffix(const char *suffix)
 {
 	int i;
+	int len = strlen(suffix);
+	const char *end = strchr(suffix, '[');
+	if(end)
+		len = end - suffix;
 	for(i = 0; i < USER_INVALID; i++)
-		if(!strcmp(suffix, gszUserSuffixes[i]))
+		if(!strncmp(suffix, gszUserSuffixes[i], len))
 			break;
 	return i;
 }
@@ -752,12 +756,41 @@ struct Layer
 					strncpy(info.localizedActionName, node->v.h.name, sizeof(info.localizedActionName) - 1);
 					strncpy(info.actionName, node->v.h.name + sizeof("[source"), strlen(node->v.h.name) - sizeof("[source]"));
 					nextLayer_xrCreateAction(mhLayerActionSet, &info, &act.action);
-					XrPath path;
-					XrPath profile = defaultProfile;
-					// todo: parse bindigns string as profile:bindign,profile:binding
-					nextLayer_xrStringToPath(mInstance, node->v.bindings, &path);
-					mLayerSuggestedBindings[profile].Add({act.action,path});
+
+					const char *str = node->v.bindings;
 					mLayerActionIndexes[node->v.h.name] = mLayerActionSet.mActions.count - 1;
+					if(!str)
+					{
+						Log("Missing bindings for source %s\n", node->v.h.name);
+						continue;
+					}
+
+					do
+					{
+						XrPath path;
+						XrPath profile = defaultProfile;
+						const char *pstr = str;
+						const char *delim = strchr(str, ':');
+						if(delim)
+						{
+							char pr[delim - str + 1];
+							memcpy(pr, str, delim - str);
+							pr[delim - str] = 0;
+							nextLayer_xrStringToPath(mInstance, pr, &profile);
+							str = delim + 1;
+						}
+						str = strchr(pstr, ',');
+						if(!str)
+							str = pstr + strlen(pstr) + 1;
+						else str++;
+
+						char bnd[str - pstr];
+						memcpy(bnd, pstr, str - pstr - 1);
+						bnd[str - pstr - 1] = 0;
+						nextLayer_xrStringToPath(mInstance, bnd, &path);
+						mLayerSuggestedBindings[profile].Add({act.action,path});
+					}while(*(str-1));
+
 				}
 			}
 		}
@@ -1125,8 +1158,7 @@ struct Layer
 							}
 							a.baseState[i].map.src[axis].funcIndex = t - 1;
 							a.baseState[i].map.src[axis].priv = &w;
-							// todo: parse axis index? From suffix?
-							a.baseState[i].map.src[axis].axisIndex = 0;
+							a.baseState[i].map.src[axis].axisIndex = conf.suffix && !!strstr(conf.suffix, "[1]");
 							a.baseState[i].hasAxisMapping = true;
 						};
 						if(s->axis1.ptr)
@@ -1182,7 +1214,7 @@ struct Layer
 		auto *layerSuggest = mLayerSuggestedBindings.GetPtr(suggestedBindings->interactionProfile);
 		if(layerSuggest)
 		{
-			XrActionSuggestedBinding bindings[suggestedBindings->countSuggestedBindings + mLayerActionSet.mActions.count];
+			XrActionSuggestedBinding bindings[suggestedBindings->countSuggestedBindings + layerSuggest->count];
 			memcpy(bindings, suggestedBindings->suggestedBindings, suggestedBindings->countSuggestedBindings * sizeof(XrActionSuggestedBinding));
 			XrInteractionProfileSuggestedBinding newSuggestedBindings = *suggestedBindings;
 			newSuggestedBindings.countSuggestedBindings = suggestedBindings->countSuggestedBindings + layerSuggest->count;
