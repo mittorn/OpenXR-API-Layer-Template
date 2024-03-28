@@ -420,8 +420,9 @@ struct BindingProfileSection
 					const char *suffix = strchr(l.CurrentSection->table[i][j].k, '.');
 					if(suffix)
 					{
-						char str[suffix - l.CurrentSection->table[i][j].k + 1] = "";
+						char str[suffix - l.CurrentSection->table[i][j].k + 1];
 						memcpy(str, l.CurrentSection->table[i][j].k, suffix - l.CurrentSection->table[i][j].k);
+						str[suffix - l.CurrentSection->table[i][j].k] = 0;
 						suffix++;
 						maps[PathIndexFromSuffix(suffix)][str] = map;
 					}
@@ -655,6 +656,11 @@ struct Layer
 		GrowArray<ActionBoolean> mLayerActionsBoolean;
 		GrowArray<ActionFloat> mLayerActionsFloat;
 		GrowArray<ActionVec2> mLayerActionsVec2;
+
+		// need to dynamicly inject new sources
+		HashArrayMap<const char*, int> mBoolIndexes;
+		HashArrayMap<const char*, int> mFloatIndexes;
+		HashArrayMap<const char*, int> mVec2Indexes;
 
 		~SessionState()
 		{
@@ -1086,6 +1092,55 @@ struct Layer
 		}
 	}
 
+	template<typename AT>
+	int AddSourceToSession(HashArrayMap<const char*, int> &indexMap, GrowArray<AT>& array, const char *name)
+	{
+		int &idx = indexMap[name];
+		if(!idx)
+		{
+			idx = array.count + 1;
+			array.Add({mLayerActionSet.mActions[mLayerActionIndexes[name]]});
+		}
+		return idx - 1;
+	}
+
+	template<typename Conf, typename AT>
+	void MapFromConfig(const Conf &conf, HashArrayMap<const char*, int> &indexMap, GrowArray<AT>&array, int &hand, int &action )
+	{
+		action = AddSourceToSession(indexMap, array, conf.ptr->h.name);
+		if(conf.suffix)
+			hand = PathIndexFromSuffix(conf.suffix);
+		else if(conf.ptr->subactionOverride.val)
+		{
+			XrPath p;
+			nextLayer_xrStringToPath(mInstance, conf.ptr->subactionOverride.val, &p);
+			hand = FindPath(p);
+		}
+		else
+			hand = 1;
+	}
+
+	template<typename Conf>
+	void AxisFromConfig(Action &a, int hand, const Conf &conf, int axis, SessionState &w)
+	{
+		int t = conf.ptr->actionType;
+		if(t == SourceSection::action_bool)
+			MapFromConfig( conf, w.mBoolIndexes, w.mLayerActionsBoolean, a.baseState[hand].map.src[axis].handIndex, a.baseState[hand].map.src[axis].actionIndex );
+		else if(t == SourceSection::action_float)
+			MapFromConfig( conf, w.mFloatIndexes, w.mLayerActionsFloat, a.baseState[hand].map.src[axis].handIndex, a.baseState[hand].map.src[axis].actionIndex );
+		else if(t == SourceSection::action_vector2)
+			MapFromConfig( conf, w.mVec2Indexes, w.mLayerActionsVec2, a.baseState[hand].map.src[axis].handIndex, a.baseState[hand].map.src[axis].actionIndex );
+		else
+		{
+			Log( "Invalid action type: axis%d %d %s %s\n", axis, t, conf.suffix?conf.suffix:"(auto)", conf.ptr->h.name );
+			t = 1;
+		}
+		a.baseState[hand].map.src[axis].funcIndex = t - 1;
+		a.baseState[hand].map.src[axis].priv = &w;
+		a.baseState[hand].map.src[axis].axisIndex = conf.suffix && !!strstr(conf.suffix, "[1]");
+		a.baseState[hand].hasAxisMapping = true;
+	}
+
 	void InitProfile(SessionState &w, BindingProfileSection *p)
 	{
 		w.mActionsBoolean.~HashArrayMap();// = {};
@@ -1094,9 +1149,9 @@ struct Layer
 		w.mLayerActionsBoolean.~GrowArray();// = {};
 		w.mLayerActionsFloat.~GrowArray();// = {};
 		w.mLayerActionsVec2.~GrowArray();// = {};
-		HashArrayMap<const char*, int> boolIndexes{};
-		HashArrayMap<const char*, int> floatIndexes{};
-		HashArrayMap<const char*, int> vec2Indexes{};
+		w.mBoolIndexes.~HashArrayMap();
+		w.mFloatIndexes.~HashArrayMap();
+		w.mVec2Indexes.~HashArrayMap();
 		for(int i = 0; i < w.mActionSetsCount; i++)
 		{
 			ActionSet &set = gActionSetInfos[w.mActionSets[i]];
@@ -1110,61 +1165,23 @@ struct Layer
 					if(s)
 					{
 						a.baseState[i].override = true;
-						auto mapFromConfig = [this](const auto  &conf, auto &indexMap, auto &array, int &hand, int &action )
-						{
-							int &idx = indexMap[conf.ptr->h.name];
-							if(!idx)
-							{
-								idx = array.count + 1;
-								array.Add({mLayerActionSet.mActions[mLayerActionIndexes[conf.ptr->h.name]]});
-							}
-							if(conf.suffix)
-								hand = PathIndexFromSuffix(conf.suffix);
-							else if(conf.ptr->subactionOverride.val)
-							{
-								XrPath p;
-								nextLayer_xrStringToPath(mInstance, conf.ptr->subactionOverride.val, &p);
-								hand = FindPath(p);
-							}
-							else
-								hand = 1;
-							action = idx - 1;
-						};
 
 						if(s->map.ptr)
 						{
 							if(s->map.ptr->actionType == SourceSection::action_bool && a.info.actionType == XR_ACTION_TYPE_BOOLEAN_INPUT)
-								mapFromConfig( s->map, boolIndexes, w.mLayerActionsBoolean, a.baseState[i].map.handIndex, a.baseState[i].map.actionIndex );
+								MapFromConfig( s->map, w.mBoolIndexes, w.mLayerActionsBoolean, a.baseState[i].map.handIndex, a.baseState[i].map.actionIndex );
 							else if(s->map.ptr->actionType == SourceSection::action_float && a.info.actionType == XR_ACTION_TYPE_FLOAT_INPUT)
-								mapFromConfig( s->map, floatIndexes, w.mLayerActionsFloat, a.baseState[i].map.handIndex, a.baseState[i].map.actionIndex );
+								MapFromConfig( s->map, w.mFloatIndexes, w.mLayerActionsFloat, a.baseState[i].map.handIndex, a.baseState[i].map.actionIndex );
 							else if(s->map.ptr->actionType == SourceSection::action_vector2 && a.info.actionType == XR_ACTION_TYPE_VECTOR2F_INPUT)
-								mapFromConfig( s->map, vec2Indexes, w.mLayerActionsVec2, a.baseState[i].map.handIndex, a.baseState[i].map.actionIndex );
+								MapFromConfig( s->map, w.mVec2Indexes, w.mLayerActionsVec2, a.baseState[i].map.handIndex, a.baseState[i].map.actionIndex );
 							else
 								Log( "Invalid direct action map (types must be same): %s %s %s\n", s->h.name, s->map.suffix? s->map.suffix: "(auto)", s->map.ptr->h.name );
 						}
-						auto axisFromConfig = [this](auto mapFromConfig, Action &a, int i, const auto &conf, int axis, SessionState &w, auto &boolIndexes, auto &floatIndexes, auto &vec2Indexes)
-						{
-							int t = conf.ptr->actionType;
-							if(t == SourceSection::action_bool)
-								mapFromConfig( conf, boolIndexes, w.mLayerActionsBoolean, a.baseState[i].map.src[axis].handIndex, a.baseState[i].map.src[axis].actionIndex );
-							else if(t == SourceSection::action_float)
-								mapFromConfig( conf, floatIndexes, w.mLayerActionsFloat, a.baseState[i].map.src[axis].handIndex, a.baseState[i].map.src[axis].actionIndex );
-							else if(t == SourceSection::action_vector2)
-								mapFromConfig( conf, vec2Indexes, w.mLayerActionsVec2, a.baseState[i].map.src[axis].handIndex, a.baseState[i].map.src[axis].actionIndex );
-							else
-							{
-								Log( "Invalid action type: axis%d %d %s %s\n", axis, t, conf.suffix?conf.suffix:"(auto)", conf.ptr->h.name );
-								t = 1;
-							}
-							a.baseState[i].map.src[axis].funcIndex = t - 1;
-							a.baseState[i].map.src[axis].priv = &w;
-							a.baseState[i].map.src[axis].axisIndex = conf.suffix && !!strstr(conf.suffix, "[1]");
-							a.baseState[i].hasAxisMapping = true;
-						};
+
 						if(s->axis1.ptr)
-							axisFromConfig(mapFromConfig, a, i, s->axis1, 0, w, boolIndexes, floatIndexes, vec2Indexes);
+							AxisFromConfig(a, i, s->axis1, 0, w);
 						if(s->axis2.ptr)
-							axisFromConfig(mapFromConfig, a, i, s->axis2, 1, w, boolIndexes, floatIndexes, vec2Indexes);
+							AxisFromConfig(a, i, s->axis2, 1, w);
 					}
 				}
 				switch(a.info.actionType)
