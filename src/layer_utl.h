@@ -290,23 +290,30 @@ struct HashArrayMap {
 			for(int j = 0; j < table[i].count; j++)
 				KeyDealloc(table[i][j].k);
 	}
-
-	// just in case: check existance or constant access
-	Value *GetPtr(const Key &key) const
+	Node *GetNode(const Key &key) const
 	{
 		size_t hashValue = HashFunc<TblSize>(key);
 		const GrowArray<Node> &entry = table[hashValue];
 		for(int i = 0; i < entry.count; i++)
 		{
 			if( KeyCompare(entry[i].k, key))
-				return &entry[i].v;
+				return &entry[i];
 		}
+		return nullptr;
+	}
+
+	// just in case: check existance or constant access
+	Value *GetPtr(const Key &key) const
+	{
+		Node *n = GetNode(key);
+		if(n)
+			return &n->v;
 		return nullptr;
 	}
 
 	Value &operator [] (const Key &key)
 	{
-		return GetOrAllocate(key);
+		return GetOrAllocate(key)->v;
 	}
 
 #define HASHFIND(key) \
@@ -316,13 +323,13 @@ struct HashArrayMap {
 		if( KeyCompare(entry[i].k, key)) \
 			break;
 
-	Value& GetOrAllocate(const Key &key)
+	Node *GetOrAllocate(const Key &key)
 	{
 		HASHFIND(key);
 		if(i == entry.count )
 			entry.Add(Node(KeyAlloc(key)));
 
-		return entry[i].v;
+		return &entry[i];
 	}
 
 	bool Remove(const Key &key)
