@@ -326,22 +326,10 @@ struct EnumOption_
 struct SourceSection
 {
 	SectionHeader(source);
-	EnumOption(sourceType, remap, server);
-	EnumOption(actionType, action_bool, action_float, action_vector2);
+	EnumOption(actionType, action_bool, action_float, action_vector2, action_external);
 	// todo: bindings=/user/hand/left/input/grip/pose,/interaction_profiles/valve/index_controller:/user/hand/left/input/select/click
 	StringOption(bindings);
 	StringOption(subactionOverride);
-	Option(float, minXIn);
-	Option(float, maxXIn);
-	Option(float, minXOut);
-	Option(float, maxXOut);
-	Option(float, minYIn);
-	Option(float, maxYIn);
-	Option(float, minYOut);
-	Option(float, maxYOut);
-	Option(float, threshold);
-	Option(int, transformFunc);
-
 };
 
 struct BindingProfileSection;
@@ -486,11 +474,13 @@ static void LoadConfig(Config *c)
 static float GetBoolAction(void *priv, int act, int hand, int ax);
 static float GetFloatAction(void *priv, int act, int hand, int ax);
 static float GetVec2Action(void *priv, int act, int hand, int ax);
+static float GetExtAction(void *priv, int act, int hand, int ax);
 constexpr float (*actionFuncs[4])(void *priv, int act, int hand, int ax) =
 {
 	GetBoolAction,
 	GetFloatAction,
-	GetVec2Action
+	GetVec2Action,
+	GetExtAction
 };
 
 struct Layer
@@ -662,6 +652,8 @@ struct Layer
 		HashArrayMap<const char*, int> mFloatIndexes;
 		HashArrayMap<const char*, int> mVec2Indexes;
 
+		HashArrayMap<const char*, float[2], 0> mExternalSources;
+
 		~SessionState()
 		{
 			delete[] mActionSets;
@@ -740,7 +732,7 @@ struct Layer
 		{
 			for(auto *node = config.sources.mSections.table[i]; node; node = node->n)
 			{
-				if(node->v.sourceType == SourceSection::remap)
+				if(node->v.actionType < SourceSection::action_external)
 				{
 					mLayerActionSet.mActions.Add({});
 					Action &act = mLayerActionSet.mActions[mLayerActionSet.mActions.count - 1];
@@ -1126,10 +1118,19 @@ struct Layer
 		return FindPath(p);
 	}
 
+	int AddExternalSource(SessionState &w, const char *name)
+	{
+		auto *n = w.mExternalSources.GetOrAllocate(name);
+		return n - w.mExternalSources.table[0].mem;
+	}
+
 	void AxisFromConfig(Action &a, int hand, SourceSection &c, const char *suffix, int axis, SessionState &w)
 	{
 		int t = c.actionType;
-		a.baseState[hand].map.src[axis].actionIndex = AddSourceToSession(w, (XrActionType)t, c.h.name );
+		if( t < SourceSection::action_external)
+			a.baseState[hand].map.src[axis].actionIndex = AddSourceToSession( w, (XrActionType)t, c.h.name );
+		else
+			a.baseState[hand].map.src[axis].actionIndex = AddExternalSource( w, c.h.name );
 		if(a.baseState[hand].map.src[axis].actionIndex < 0)
 		{
 			Log( "Invalid action type: axis%d %s\n", axis, t, suffix?suffix:"(auto)", c.h.name );
@@ -1376,6 +1377,13 @@ float GetVec2Action(void *priv, int act, int hand, int ax)
 	return ax?w->mLayerActionsVec2[act].typedState[hand].currentState.y
 			: w->mLayerActionsVec2[act].typedState[hand].currentState.x;
 }
+
+float GetExtAction(void *priv, int act, int hand, int ax)
+{
+	Layer::SessionState *w = (Layer::SessionState *)priv;
+	return w->mExternalSources.table[0][act].v[ax];
+}
+
 
 
 Layer Layer::mInstances[max_instances];
