@@ -26,17 +26,23 @@
 #define Log(...) FPrint(stderr, __VA_ARGS__);
 enum EventType{
 	EVENT_NULL,
-	EVENT_POLL_INTERACTION_PROFILE_CHANGED,
+	EVENT_POLL_TRIGGER_INTERACTION_PROFILE_CHANGED,
 	EVENT_POLL_RELOAD_CONFIG,
-	EVENT_ACTION_BOOL,
+	EVENT_POLL_SET_EXTERNAL_SOURCE,
+	EVENT_POLL_MAP_DIRECT_SOURCE,
+	EVENT_POLL_MAP_AXIS,
+	EVENT_POLL_MAP_ACTION,
+	EVENT_POLL_RESET_ACTION,
+	EVENT_POLL_SET_PROFILE,
+	EVENT_POLL_DUMP_APP_BINDINGS,
+	EVENT_POLL_DUMP_LAYER_BINDINGS,
 };
 
-union PollEvent{
+struct PollEvent{
 	EventType type;
-	struct InteractionProfileChanged
-	{
-		EventType type = EVENT_POLL_INTERACTION_PROFILE_CHANGED;
-	};
+	int idx;
+	char arg1[32];
+	char arg2[32];
 };
 
 struct EventPoller
@@ -970,12 +976,76 @@ struct Layer
 			}
 		}
 	}
+	Action *FindAppSessionAction(SessionState &w, const char *name)
+	{
+		for(int i = 0; i < w.mActionsBoolean.TblSize; i++)
+			for(int j = 0; j < w.mActionsBoolean.table[i].count;j++)
+				if(!strcmp(w.mActionsBoolean.table[i][j].v.info.actionName, name))
+					return &w.mActionsBoolean.table[i][j].v;
+
+		for(int i = 0; i < w.mActionsFloat.TblSize; i++)
+			for(int j = 0; j < w.mActionsFloat.table[i].count;j++)
+				if(!strcmp(w.mActionsFloat.table[i][j].v.info.actionName, name))
+					return &w.mActionsFloat.table[i][j].v;
+
+		for(int i = 0; i < w.mActionsVec2.TblSize; i++)
+			for(int j = 0; j < w.mActionsVec2.table[i].count;j++)
+				if(!strcmp(w.mActionsVec2.table[i][j].v.info.actionName, name))
+					return &w.mActionsVec2.table[i][j].v;
+		return nullptr;
+	}
+
+	forceinline void ProcessExternalActions(SessionState &w)
+	{
+		if( unlikely( poller.pollLock.TryLock()))
+		{
+			PollEvent ev;
+			while( poller.pollEvents.Dequeue( ev ))
+			{
+				switch ( ev.type )
+				{
+				case EVENT_POLL_DUMP_APP_BINDINGS:
+					for(int i = 0; i < w.mActionSetsCount; i++)
+						DumpActionSet(mActiveSession, w.mActionSets[i]);
+					break;
+				case EVENT_POLL_RELOAD_CONFIG:
+						LoadConfig(&config);
+						InitProfile(w, config.startupProfile.ptr);
+					break;
+				case EVENT_POLL_SET_PROFILE:
+						InitProfile(w, &config.bindings.mSections[ev.arg1]);
+					break;
+				case EVENT_POLL_MAP_ACTION:
+					{
+						Action *a = FindAppSessionAction(w,ev.arg1);
+						ActionMapSection *s = config.actionMaps.mSections.GetPtr(ev.arg2);
+						if(a && s)
+							ApplyActionMap(w, *a, s, ev.idx );
+					}
+					break;
+				case EVENT_POLL_RESET_ACTION:
+					{
+						Action *a = FindAppSessionAction(w,ev.arg1);
+						if(a)
+						{
+							for(int i = 0; i < USER_PATH_COUNT; i++)
+							{
+								ActionMapSection *s = config.startupProfile.ptr->actionMaps.maps[i][a->info.actionName];
+								if(s)
+									ApplyActionMap(w, *a, s, i);
+							}
+						}
+					}
+					break;
+				default:
+					break;
+				}
+			}
+		}
+	}
 
 	forceinline XrResult thisLayer_xrSyncActions(XrSession session, const XrActionsSyncInfo *syncInfo)
 	{
-
-		//XrResult ret = nextLayer_xrSyncActions(session, syncInfo);
-
 		XrActionsSyncInfo nsyncInfo = *syncInfo;//{XR_TYPE_ACTIONS_SYNC_INFO};
 		//nsyncInfo.countActiveActionSets = 1;
 		XrActiveActionSet as[syncInfo->countActiveActionSets + 1];
@@ -995,6 +1065,7 @@ struct Layer
 				return ret;
 			mActiveSession = session;
 		}
+		ProcessExternalActions(*mpActiveSession);
 		for(int i = 0; i < mpActiveSession->mLayerActionsBoolean.count; i++)
 		{
 			for(int hand = 0; hand < 2; hand++)
