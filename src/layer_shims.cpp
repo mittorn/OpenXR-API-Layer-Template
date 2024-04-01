@@ -40,9 +40,10 @@ enum EventType{
 
 struct PollEvent{
 	EventType type;
-	int idx;
-	char arg1[32];
-	char arg2[32];
+	int i1;
+	float f1;
+	char str1[32];
+	char str2[32];
 };
 
 struct EventPoller
@@ -136,6 +137,7 @@ struct Sections
 			for(auto *node = l.parser.mDict.table[i]; node; node = node->n)
 			{
 				char prefix[256];
+				// todo: remove raw section names from config
 				int len = SBPrint(prefix, "[%s.", S::prefix);
 				if(!strncmp(node->k, prefix, len-1))
 				{
@@ -1013,19 +1015,19 @@ struct Layer
 						InitProfile(w, config.startupProfile.ptr);
 					break;
 				case EVENT_POLL_SET_PROFILE:
-						InitProfile(w, &config.bindings.mSections[ev.arg1]);
+						InitProfile(w, &config.bindings.mSections[ev.str1]);
 					break;
 				case EVENT_POLL_MAP_ACTION:
 					{
-						Action *a = FindAppSessionAction(w,ev.arg1);
-						ActionMapSection *s = config.actionMaps.mSections.GetPtr(ev.arg2);
+						Action *a = FindAppSessionAction(w,ev.str1);
+						ActionMapSection *s = config.actionMaps.mSections.GetPtr(ev.str2);
 						if(a && s)
-							ApplyActionMap(w, *a, s, ev.idx );
+							ApplyActionMap(w, *a, s, ev.i1 );
 					}
 					break;
 				case EVENT_POLL_RESET_ACTION:
 					{
-						Action *a = FindAppSessionAction(w,ev.arg1);
+						Action *a = FindAppSessionAction(w,ev.str1);
 						if(a)
 						{
 							for(int i = 0; i < USER_PATH_COUNT; i++)
@@ -1039,7 +1041,7 @@ struct Layer
 					break;
 				case EVENT_POLL_SET_EXTERNAL_SOURCE:
 						// todo: add float? Use union?
-						w.mExternalSources[ev.arg1][ev.idx] = atof(ev.arg2);
+						w.mExternalSources[ev.str1][ev.i1] = ev.f1;
 					break;
 				case EVENT_POLL_TRIGGER_INTERACTION_PROFILE_CHANGED: // todo: move to xrPollEvents? Separate queue?
 					mTriggerInteractionProfileChanged = true;
@@ -1050,25 +1052,30 @@ struct Layer
 					break;
 				case EVENT_POLL_MAP_DIRECT_SOURCE:
 					{
-						Action *a = FindAppSessionAction(w,ev.arg1);
+						Action *a = FindAppSessionAction(w,ev.str1);
+						// todo: this should be source suffix, not action
+						char *suffix = (char*)strchr(ev.str1, '.');
+						if(suffix)
+							*suffix++ = 0;
 						if(a)
 						{
-							SourceSection *s = config.sources.mSections.GetPtr(ev.arg2);
-							// todo: get out how to specify hand mapping
+							SourceSection *s = config.sources.mSections.GetPtr(ev.str2);
 							if((int)s->actionType == (int)a->info.actionType)
-								a->baseState[ev.idx].map.actionIndex = AddSourceToSession(w, a->info.actionType, s->h.name );
-							a->baseState[ev.idx].map.handIndex = HandFromConfig(*s, nullptr);
+								a->baseState[ev.i1].map.actionIndex = AddSourceToSession(w, a->info.actionType, s->h.name );
+							a->baseState[ev.i1].map.handIndex = HandFromConfig(*s, suffix);
 						}
 					}
 				break;
 				case EVENT_POLL_MAP_AXIS:
 				{
-						Action *a = FindAppSessionAction(w,ev.arg1);
+						Action *a = FindAppSessionAction(w,ev.str1);
+						char *suffix = (char*)strchr(ev.str1, '.');
+						if(suffix)
+							*suffix++ = 0;
 						if(a)
 						{
-							SourceSection *s = config.sources.mSections.GetPtr(ev.arg2);
-							// todo: get out how to specify hand/axis mapping
-							AxisFromConfig(*a, ev.idx, *s, nullptr, 0, w);
+							SourceSection *s = config.sources.mSections.GetPtr(ev.str2);
+							AxisFromConfig(*a, ev.i1, *s, suffix, ev.f1, w);
 						}
 				}
 				break;
