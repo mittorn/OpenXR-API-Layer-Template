@@ -32,13 +32,17 @@ struct GrowArray
 		if(init)
 			Grow(init);
 	}
-	~GrowArray()
+	void Clear()
 	{
 		if(mem)
 			free(mem);
 		mem = nullptr;
 		count = 0;
 		alloc = 0;
+	}
+	~GrowArray()
+	{
+		Clear();
 	}
 
 	// non-copyable
@@ -164,8 +168,8 @@ struct HashMap {
 
 	HashMap() {
 	}
-
-	~HashMap() {
+	void Clear()
+	{
 		for(size_t i = 0; i < TblSize; i++)
 		{
 			Node *entry = table[i];
@@ -178,6 +182,10 @@ struct HashMap {
 			}
 			table[i] = NULL;
 		}
+	}
+
+	~HashMap() {
+		Clear();
 	}
 
 	// just in case: check existance or constant access
@@ -284,12 +292,20 @@ struct HashArrayMap {
 
 	HashArrayMap() {
 	}
-
-	~HashArrayMap() {
+	void Clear()
+	{
 		for(int i = 0; i < TblSize; i++)
+		{
 			for(int j = 0; j < table[i].count; j++)
 				KeyDealloc(table[i][j].k);
+			table[i].Clear();
+		}
 	}
+
+	~HashArrayMap() {
+		Clear();
+	}
+
 	Node *GetNode(const Key &key) const
 	{
 		size_t hashValue = HashFunc<TblSize>(key);

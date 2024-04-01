@@ -18,14 +18,15 @@
 #include "struct_utl.h"
 #include "ini_parser.h"
 #include <unistd.h>
+#include <fcntl.h>
 #ifdef QTCREATOR_SUCKS
 }
 #endif
 
 #if 1
-#define Log(...) FPrint(stderr, __VA_ARGS__);
+#define Log(...) FPrint(stderr, __VA_ARGS__)
 enum EventType{
-	EVENT_NULL,
+	EVENT_POLL_NULL,
 	EVENT_POLL_TRIGGER_INTERACTION_PROFILE_CHANGED,
 	EVENT_POLL_RELOAD_CONFIG,
 	EVENT_POLL_SET_EXTERNAL_SOURCE,
@@ -48,19 +49,64 @@ struct PollEvent{
 
 struct EventPoller
 {
-	Thread pollerThread = Thread([](void *poller){
+	Thread pollerThread;
+	EventPoller() : pollerThread([](void *poller){
 		EventPoller *p = (EventPoller*)poller;
 		p->Run();
-	});
+	},this) {}
 	CycleQueue<PollEvent> pollEvents;
 	SpinLock pollLock;
 	int fd = -1;
 	bool InitSocket()
 	{
-		return false;
+		fd = open("/tmp/command_pipe", O_RDONLY);
+		return fd >= 0;
 	}
 	void Run()
 	{
+		char buf[256];
+		int pos = 0;
+		while( read(fd, &buf[pos], 1) > 0 )
+		{
+			if(!Running)
+				return;
+			if(pos >= 255)
+				break;
+			if(buf[pos] == '\n')
+			{
+				PollEvent ev = {EVENT_POLL_NULL};
+				char *cmd = buf;
+				buf[pos] = 0;
+				pos = 0;
+				char *i1s = strchr(buf, ' ');
+				if(!i1s)
+					continue;
+				*i1s++ = 0;
+				ev.type = (EventType)atoi(cmd);
+				char *f1s = strchr(i1s, ' ');
+				if(!f1s)
+					continue;
+				*f1s++ = 0;
+				ev.i1 = atoi(i1s);
+				char *str1 = strchr(f1s, ' ');
+				if(!str1)
+					continue;
+				*str1++ = 0;
+				ev.f1 = atof(f1s);
+				char *str2 = strchr(str1, ' ');
+				if(!str2)
+					continue;
+				*str2++ = 0;
+				strncpy(ev.str1, str1, sizeof(ev.str1) - 1);
+				strncpy(ev.str2, str2, sizeof(ev.str2) - 1);
+				{
+					Lock l{pollLock};
+					pollEvents.Enqueue(ev);
+				}
+
+			}
+			else pos++;
+		}
 	}
 	volatile bool Running = false;
 	void Start(int port)
@@ -1011,6 +1057,7 @@ struct Layer
 						DumpActionSet(mActiveSession, gActionSetInfos[w.mActionSets[i]]);
 					break;
 				case EVENT_POLL_RELOAD_CONFIG:
+						config.~Config();
 						LoadConfig(&config);
 						InitProfile(w, config.startupProfile.ptr);
 					break;
@@ -1277,15 +1324,15 @@ struct Layer
 
 	void InitProfile(SessionState &w, BindingProfileSection *p)
 	{
-		w.mActionsBoolean.~HashArrayMap();// = {};
-		w.mActionsFloat.~HashArrayMap();// = {};
-		w.mActionsVec2.~HashArrayMap();// = {};
-		w.mLayerActionsBoolean.~GrowArray();// = {};
-		w.mLayerActionsFloat.~GrowArray();// = {};
-		w.mLayerActionsVec2.~GrowArray();// = {};
-		w.mBoolIndexes.~HashArrayMap();
-		w.mFloatIndexes.~HashArrayMap();
-		w.mVec2Indexes.~HashArrayMap();
+		w.mActionsBoolean.Clear();
+		w.mActionsFloat.Clear();
+		w.mActionsVec2.Clear();
+		w.mLayerActionsBoolean.Clear();
+		w.mLayerActionsFloat.Clear();
+		w.mLayerActionsVec2.Clear();
+		w.mBoolIndexes.Clear();
+		w.mFloatIndexes.Clear();
+		w.mVec2Indexes.Clear();
 		for(int i = 0; i < w.mActionSetsCount; i++)
 		{
 			ActionSet &set = gActionSetInfos[w.mActionSets[i]];
