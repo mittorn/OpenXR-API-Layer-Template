@@ -695,7 +695,7 @@ struct Layer
 	SessionState *mpActiveSession;
 	// must be session-private, but always need most recent
 	XrTime mPredictedTime;
-
+	bool mTriggerInteractionProfileChanged, mTriggerInteractionProfileChangedOld;
 
 	XrResult noinline thisLayer_xrCreateSession(XrInstance instance, const XrSessionCreateInfo *createInfo, XrSession *session)
 	{
@@ -1006,7 +1006,7 @@ struct Layer
 				{
 				case EVENT_POLL_DUMP_APP_BINDINGS:
 					for(int i = 0; i < w.mActionSetsCount; i++)
-						DumpActionSet(mActiveSession, w.mActionSets[i]);
+						DumpActionSet(mActiveSession, gActionSetInfos[w.mActionSets[i]]);
 					break;
 				case EVENT_POLL_RELOAD_CONFIG:
 						LoadConfig(&config);
@@ -1037,10 +1037,46 @@ struct Layer
 						}
 					}
 					break;
+				case EVENT_POLL_SET_EXTERNAL_SOURCE:
+						// todo: add float? Use union?
+						w.mExternalSources[ev.arg1][ev.idx] = atof(ev.arg2);
+					break;
+				case EVENT_POLL_TRIGGER_INTERACTION_PROFILE_CHANGED: // todo: move to xrPollEvents? Separate queue?
+					mTriggerInteractionProfileChanged = true;
+					mTriggerInteractionProfileChangedOld = false;
+					break;
+				case EVENT_POLL_DUMP_LAYER_BINDINGS:
+					DumpActionSet(w.mSession, mLayerActionSet);
+					break;
+				case EVENT_POLL_MAP_DIRECT_SOURCE:
+					{
+						Action *a = FindAppSessionAction(w,ev.arg1);
+						if(a)
+						{
+							SourceSection *s = config.sources.mSections.GetPtr(ev.arg2);
+							// todo: get out how to specify hand mapping
+							if((int)s->actionType == (int)a->info.actionType)
+								a->baseState[ev.idx].map.actionIndex = AddSourceToSession(w, a->info.actionType, s->h.name );
+							a->baseState[ev.idx].map.handIndex = HandFromConfig(*s, nullptr);
+						}
+					}
+				break;
+				case EVENT_POLL_MAP_AXIS:
+				{
+						Action *a = FindAppSessionAction(w,ev.arg1);
+						if(a)
+						{
+							SourceSection *s = config.sources.mSections.GetPtr(ev.arg2);
+							// todo: get out how to specify hand/axis mapping
+							AxisFromConfig(*a, ev.idx, *s, nullptr, 0, w);
+						}
+				}
+				break;
 				default:
 					break;
 				}
 			}
+			poller.pollLock.Unlock();
 		}
 	}
 
@@ -1114,10 +1150,8 @@ struct Layer
 
 		return ret;
 	}
-	void DumpActionSet(XrSession session, XrActionSet s)
+	void DumpActionSet(XrSession session, ActionSet &seti)
 	{
-		ActionSet &seti = gActionSetInfos[s];
-		Log("Attached action set: %s %s\n", seti.info.actionSetName, seti.info.localizedActionSetName );
 		for(int i = 0; i < seti.mActions.count; i++ )
 		{
 			Action &as = seti.mActions[i];
@@ -1343,7 +1377,9 @@ struct Layer
 			{
 				XrActionSet s = info->actionSets[i];
 				w.mActionSets[i] = s;
-				DumpActionSet(session,s);
+				ActionSet &seti = gActionSetInfos[s];
+				Log("Attached action set: %s %s\n", seti.info.actionSetName, seti.info.localizedActionSetName );
+				DumpActionSet(session,seti);
 			}
 			InitProfile(w, config.startupProfile.ptr);
 		}
@@ -1354,6 +1390,12 @@ struct Layer
 		XrInstance instance, XrEventDataBuffer* eventData)
 	{
 		//INSTANCE_FALLBACK(thisLayer_xrPollEvent(instance, eventData));
+		if(unlikely(mTriggerInteractionProfileChanged > mTriggerInteractionProfileChangedOld))
+		{
+			mTriggerInteractionProfileChangedOld = mTriggerInteractionProfileChanged;
+			eventData->type = XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED;
+			return XR_SUCCESS;
+		}
 		XrResult res = nextLayer_xrPollEvent(instance, eventData);
 
 		// most times it should be XR_EVENT_UNAVAILABLE
@@ -1391,7 +1433,11 @@ struct Layer
 					Log("New interaction profile for %s: %s\n", mszUserPaths[i], profileStr );
 				}
 				for(int i = 0; i < w->mActionSetsCount; i++)
-					DumpActionSet(mActiveSession, w->mActionSets[i]);
+				{
+					ActionSet &seti = gActionSetInfos[w->mActionSets[i]];
+					Log("Session action set: %s %s\n", seti.info.actionSetName, seti.info.localizedActionSetName );
+					DumpActionSet(mActiveSession, seti);
+				}
 			}
 		}
 		return res;
