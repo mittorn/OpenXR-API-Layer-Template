@@ -176,7 +176,7 @@ struct Sections
 	Sections& operator=(const Sections &) = delete;
 	Sections(ConfigLoader &l)
 	{
-		HashArrayMap<const char*, const char*> *PrevioisSection = l.CurrentSection;
+		HashArrayMap<const char*, const char*> *PreviousSection = l.CurrentSection;
 		void *PrevioisSectionPointer = l.CurrentSectionPointer;
 		for(int i = 0; i < l.parser.mDict.TblSize; i++)
 		{
@@ -187,7 +187,11 @@ struct Sections
 				int len = SBPrint(prefix, "[%s.", S::prefix);
 				if(!strncmp(node->k, prefix, len-1))
 				{
-					auto *sectionNode = mSections.GetOrAllocate(node->k);
+					char suffix[32];
+					int nlen = strlen(node->k + len - 1) - 1;
+					memcpy( suffix, node->k + len - 1, nlen);
+					suffix[nlen] = 0;
+					auto *sectionNode = mSections.GetOrAllocate(suffix);
 					S& section = sectionNode->v;
 					l.CurrentSection = &node->v;
 					l.CurrentSectionName = sectionNode->k;
@@ -204,7 +208,7 @@ struct Sections
 						}
 					}
 
-					l.CurrentSection = PrevioisSection;
+					l.CurrentSection = PreviousSection;
 					l.CurrentSectionPointer = PrevioisSectionPointer;
 				}
 			}
@@ -472,6 +476,7 @@ struct BindingProfileSection
 					{
 						maps[USER_HAND_LEFT][l.CurrentSection->table[i][j].k] = map;
 						maps[USER_HAND_RIGHT][l.CurrentSection->table[i][j].k] = map;
+						maps[USER_INVALID][l.CurrentSection->table[i][j].k] = map;
 					}
 
 					l.CurrentSection->table[i][j].v = nullptr;
@@ -805,8 +810,10 @@ struct Layer
 						info.countSubactionPaths = USER_HEAD;
 						info.subactionPaths = mUserPaths;
 					}
-					strncpy(info.localizedActionName, node->v.h.name, sizeof(info.localizedActionName) - 1);
-					strncpy(info.actionName, node->v.h.name + sizeof("[source"), strlen(node->v.h.name) - sizeof("[source]"));
+					SBPrint(info.localizedActionName, "Layer: %s", node->v.h.name);
+					strncpy(info.actionName, node->v.h.name, sizeof(info.actionName) - 1);
+
+					//strncpy(info.actionName, node->v.h.name + sizeof("[source"), strlen(node->v.h.name) - sizeof("[source]"));
 					nextLayer_xrCreateAction(mhLayerActionSet, &info, &act.action);
 
 					const char *str = node->v.bindings;
@@ -927,7 +934,7 @@ struct Layer
 		// fast branchess path
 		i = !notright + (notleft & notright) * USER_HEAD;
 		if(unlikely(i == USER_HEAD))
-			return _FindPath2(&mUserPaths[USER_HEAD], USER_PATH_COUNT - USER_HEAD, p);
+			return USER_HEAD + _FindPath2(&mUserPaths[USER_HEAD], USER_PATH_COUNT - USER_HEAD, p);
 		return i;
 	}
 
@@ -1015,7 +1022,7 @@ struct Layer
 			if(unlikely(hand.hasAxisMapping))
 			{
 				a.Update(handPath);
-				if(hand.map.actionIndex < 0)
+				//if(hand.map.actionIndex < 0)
 				{
 					// todo: detect change
 					state.changedSinceLastSync = true;
@@ -1100,8 +1107,7 @@ struct Layer
 				case EVENT_POLL_MAP_DIRECT_SOURCE:
 					{
 						Action *a = FindAppSessionAction(w,ev.str1);
-						// todo: this should be source suffix, not action
-						char *suffix = (char*)strchr(ev.str1, '.');
+						char *suffix = (char*)strchr(ev.str2, '.');
 						if(suffix)
 							*suffix++ = 0;
 						if(a)
@@ -1116,7 +1122,7 @@ struct Layer
 				case EVENT_POLL_MAP_AXIS:
 				{
 						Action *a = FindAppSessionAction(w,ev.str1);
-						char *suffix = (char*)strchr(ev.str1, '.');
+						char *suffix = (char*)strchr(ev.str2, '.');
 						if(suffix)
 							*suffix++ = 0;
 						if(a)
