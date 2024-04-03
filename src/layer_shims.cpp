@@ -396,8 +396,8 @@ struct ActionMapSection
 	SectionHeader(actionmap);
 	Option(bool, override);
 	// TODO: RPN or something similar
-	SectionReference(SourceSection, axis1);
-	SectionReference(SourceSection, axis2);
+	StringOption(axis1);
+	StringOption(axis2);
 	SectionReference(SourceSection, map);
 	EnumOption(customAction, reloadSettings, changeProfile, triggerInteractionChange);
 	SectionReference(BindingProfileSection, profileName);
@@ -1122,14 +1122,8 @@ struct Layer
 				case EVENT_POLL_MAP_AXIS:
 				{
 						Action *a = FindAppSessionAction(w,ev.str1);
-						char *suffix = (char*)strchr(ev.str2, '.');
-						if(suffix)
-							*suffix++ = 0;
 						if(a)
-						{
-							SourceSection *s = config.sources.mSections.GetPtr(ev.str2);
-							AxisFromConfig(*a, ev.i1, *s, suffix, ev.f1, w);
-						}
+							AxisFromConfig(*a, ev.i1, ev.str2, ev.f1, w);
 				}
 				break;
 				default:
@@ -1288,24 +1282,52 @@ struct Layer
 		auto *n = w.mExternalSources.GetOrAllocate(name);
 		return n - w.mExternalSources.table[0].mem;
 	}
-
-	void AxisFromConfig(Action &a, int hand, SourceSection &c, const char *suffix, int axis, SessionState &w)
+	SourceSection *SourceFromConfig(const char *name, int &hand)
 	{
-		int t = c.actionType;
-		if( t < SourceSection::action_external)
-			a.baseState[hand].map.src[axis].actionIndex = AddSourceToSession( w, (XrActionType)t, c.h.name );
+		char sectionName[256];
+		const char *suffix = strchr(name, '.');
+		hand = USER_INVALID;
+		if(suffix)
+			hand = PathIndexFromSuffix(++suffix);
+		if(hand != USER_INVALID && suffix && (suffix - name < 255 ))
+		{
+			strncpy(sectionName, name, suffix - name - 1);
+			sectionName[suffix - name - 1] = 0;
+			const char *end = strchr(suffix, '[');
+			if(end && suffix + strlen(suffix) > end + 3)
+				return nullptr;
+		}
 		else
-			a.baseState[hand].map.src[axis].actionIndex = AddExternalSource( w, c.h.name );
+			strncpy(sectionName, name, 255);
+		sectionName[255] = 0;
+		SourceSection *c = config.sources.mSections.GetPtr(sectionName);
+		if(c && hand == USER_INVALID)
+			hand = HandFromConfig(*c, nullptr);
+		return c;
+	}
+
+	void AxisFromConfig(Action &a, int hand, const char *mapping, int axis, SessionState &w)
+	{
+		SourceSection *c = SourceFromConfig(mapping, a.baseState[hand].map.src[axis].handIndex);
+		if(!c)
+		{
+			return;
+		}
+
+		int t = c->actionType;
+		if( t < SourceSection::action_external)
+			a.baseState[hand].map.src[axis].actionIndex = AddSourceToSession( w, (XrActionType)t, c->h.name );
+		else
+			a.baseState[hand].map.src[axis].actionIndex = AddExternalSource( w, c->h.name );
 		if(a.baseState[hand].map.src[axis].actionIndex < 0)
 		{
-			Log( "Invalid action type: axis%d %s\n", axis, t, suffix?suffix:"(auto)", c.h.name );
+			Log( "Invalid action type: axis%d  %s %s\n", axis, mapping, c->h.name );
 			t = 1;
 			a.baseState[hand].map.src[axis].actionIndex  = 0;
 		}
-		a.baseState[hand].map.src[axis].handIndex = HandFromConfig(c, suffix);
 		a.baseState[hand].map.src[axis].funcIndex = t - 1;
 		a.baseState[hand].map.src[axis].priv = &w;
-		a.baseState[hand].map.src[axis].axisIndex = suffix && !!strstr(suffix, "[1]");
+		a.baseState[hand].map.src[axis].axisIndex = !!strstr(mapping, "[1]");
 		a.baseState[hand].hasAxisMapping = true;
 	}
 
@@ -1322,10 +1344,10 @@ struct Layer
 			a.baseState[hand].map.handIndex = HandFromConfig(*s->map.ptr, s->map.suffix);
 		}
 
-		if(s->axis1.ptr)
-			AxisFromConfig(a, hand, *s->axis1.ptr, s->axis1.suffix, 0, w);
-		if(s->axis2.ptr)
-			AxisFromConfig(a, hand, *s->axis2.ptr, s->axis2.suffix, 1, w);
+		if(s->axis1.val)
+			AxisFromConfig(a, hand, s->axis1.val, 0, w);
+		if(s->axis2.val)
+			AxisFromConfig(a, hand, s->axis2.val, 1, w);
 	}
 
 	void InitProfile(SessionState &w, BindingProfileSection *p)
