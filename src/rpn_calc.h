@@ -91,25 +91,25 @@ T CalcOp2(T val1, T val2, char op, char op2 )
 
 #define IsOperatorToken(c) CharIn(c,"+-/*!%<>=(),")
 template <typename Token>
-bool ParseTokens( GrowArray<Token> &arr, const char *string)
+bool ParseTokens( void *priv, GrowArray<Token> &arr, const char *string)
 {
 	bool is_op = IsOperatorToken(string[0]);;
 	const char *tok_begin = string;
 	char c;
 	while(c = *string++)
 	{
-		printf("%c %d\n", c, is_op);
+		//printf("%c %d\n", c, is_op);
 		if(IsOperatorToken(c) && !(is_op && (c == '-')))
 		{
 			const char *end = string - 1;
 			while(end - 1 > tok_begin && *(end - 1) == ' ')
 				end--;
 			if(tok_begin < end)
-				arr.Add(Token(tok_begin, end, false));
+				arr.Add(Token(priv, tok_begin, end, false));
 			const char *beg = string - 1;
 			if(*string == '=')
 				string++;
-			arr.Add(Token(beg, string, true));
+			arr.Add(Token(priv, beg, string, true));
 			while(*string == ' ')
 				string++;
 			tok_begin = string;
@@ -122,7 +122,7 @@ bool ParseTokens( GrowArray<Token> &arr, const char *string)
 	while(end - 1 > tok_begin && *(end - 1) == ' ')
 		end--;
 	if(tok_begin < end)
-		arr.Add(Token(tok_begin, string - 1, false));
+		arr.Add(Token(priv, tok_begin, string - 1, false));
 	return true;
 }
 #undef IsOperatorToken
@@ -247,7 +247,7 @@ bool DumpOrder(GrowArray<Token> &arr)
 				stack.RemoveAt(stack.count - 1);
 				nargs--;
 			}
-			stack.Add(Token(tempvar, &tempvar[strlen(tempvar)], false));
+			stack.Add(Token(nullptr, tempvar, &tempvar[strlen(tempvar)], false));
 		}
 		pos++;
 	}
@@ -266,7 +266,7 @@ template <typename Numeric = float, size_t stacksize = 32, typename Token>
 Numeric Calculate(GrowArray<Token> &arr)
 {
 	Token stack[stacksize];
-	size_t sp;
+	size_t sp = 0;
 	int pos = 0;
 	while(pos < arr.count)
 	{
@@ -285,15 +285,14 @@ Numeric Calculate(GrowArray<Token> &arr)
 	return -1;
 }
 
-#if 0
-
+#ifdef TEST_RPNCALC
 struct StringToken
 {
 	char ch[32] = "";
 	bool op = false;
 	bool func = false;
 	StringToken(){}
-	constexpr StringToken(const char *begin, const char *end, bool _op)
+	constexpr StringToken(void *priv, const char *begin, const char *end, bool _op)
 	{
 		char *s = ch;
 		while(begin < end && s - ch < 31)
@@ -409,7 +408,7 @@ struct NumericToken
 		int funcindex;
 	} d;
 	NumericToken(){}
-	NumericToken(const char *begin, const char *end, bool _op)
+	NumericToken(void *priv, const char *begin, const char *end, bool _op)
 	{
 		if(!strncmp(begin, "sin", end - begin) || !strncmp(begin, "func3", end - begin))
 		{
@@ -485,7 +484,7 @@ struct NumericToken
 			return 0;
 		return CalcArgCount(d.ch[0], d.ch[1]);
 	}
-	float Val() const
+	T Val() const
 	{
 		if(mode == val)
 			return d.val;
@@ -550,7 +549,7 @@ int main(int argc, const char **argv)
 	if(argc>1)
 		input = argv[1];
 	GrowArray<NumericToken<double>> arr;
-	ParseTokens(arr, input);
+	ParseTokens(nullptr, arr, input);
 	for(int i = 0; i < arr.count; i++)
 	{
 		char buf[32] = "";
@@ -577,7 +576,7 @@ int main(int argc, const char **argv)
 			printf("o %s %d|\n", buf, out[i].Op());
 		}
 	GrowArray<StringToken> arr1;
-	ParseTokens(arr1, input);
+	ParseTokens(nullptr, arr1, input);
 	for(int i = 0; i < arr1.count; i++)
 	{
 		char buf[32] = "";

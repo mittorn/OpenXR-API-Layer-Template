@@ -19,6 +19,7 @@
 #include "ini_parser.h"
 #include <unistd.h>
 #include <fcntl.h>
+#include "rpn_calc.h"
 #ifdef QTCREATOR_SUCKS
 }
 #endif
@@ -534,13 +535,215 @@ static float GetBoolAction(void *priv, int act, int hand, int ax);
 static float GetFloatAction(void *priv, int act, int hand, int ax);
 static float GetVec2Action(void *priv, int act, int hand, int ax);
 static float GetExtAction(void *priv, int act, int hand, int ax);
-constexpr float (*actionFuncs[4])(void *priv, int act, int hand, int ax) =
+static float GetRPNAction(void *priv, int act, int hand, int ax);
+constexpr float (*actionFuncs[])(void *priv, int act, int hand, int ax) =
 {
 	GetBoolAction,
 	GetFloatAction,
 	GetVec2Action,
-	GetExtAction
+	GetExtAction,
+	GetRPNAction
 };
+
+struct ActionSource
+{
+	int actionIndex;
+	int funcIndex;
+	int axisIndex;
+	int handIndex;
+	void *priv;
+	float GetValue() const
+	{
+		return actionFuncs[funcIndex](priv, actionIndex, handIndex, axisIndex);
+	}
+};
+
+static bool GetSource( void *priv, ActionSource &s, const char *src );
+static float *GetVar( void *priv, const char *v );
+struct RPNToken
+{
+	enum
+	{
+		val,
+		op,
+		func,
+		var,
+		act
+	} mode;
+	union
+	{
+		float val;
+		char ch[2];
+		int funcindex;
+		float *var;
+		ActionSource src;
+	} d;
+	RPNToken(){}
+	RPNToken(void *priv, const char *begin, const char *end, bool _op)
+	{
+		if(!strncmp(begin, "sin", end - begin) || !strncmp(begin, "func3", end - begin))
+		{
+			mode = func;
+			d.funcindex = *begin == 'f';
+		}
+		else if(_op)
+		{
+			mode = op;
+			strncpy(d.ch,begin, 2);
+			if(end < begin + 2)
+				d.ch[end - begin] = 0;
+		}
+		else if(*begin == '$')
+		{
+			char v[32];
+			char *s = v;
+			begin++;
+			while(begin < end && s - v < 31)
+				*s++ = *begin++;
+			*s = 0;
+			mode = var;
+			d.var = GetVar( priv, v );
+		}
+		else
+		{
+			char v[32];
+			char *s = v;
+			while(begin < end && s - v < 31)
+				*s++ = *begin++;
+			*s = 0;
+			if(GetSource(priv, d.src, v))
+				mode = act;
+			else
+			{
+				mode = val;
+				d.val = atof(v);
+			}
+		}
+	}
+	RPNToken(float v)
+	{
+		mode = val;
+		d.val = v;
+	}
+	char Op() const
+	{
+		return mode == op ? d.ch[0]:0;
+	}
+	bool IsOperator() const
+	{
+		return (mode == op) && CalcIsOp(Op());
+	}
+	bool IsIdent() const
+	{
+		return mode == val || mode == var || mode == act;
+	}
+	bool IsFunction() const
+	{
+		return mode == func;
+	}
+	void Stringify(char *buf, size_t len) const
+	{
+		if(len < 2)
+			return;
+		if(mode == op)
+		{
+			strncpy(buf, d.ch, 2);
+			buf[2] = 0;
+		}
+		else if(mode == val)
+		{
+			snprintf(buf, len - 1, "%f",(double)Val());
+		}
+		else if(mode == func)
+		{
+			snprintf(buf, len - 1, "func%d", d.funcindex);
+		}
+		else if(mode == var)
+		{
+			snprintf(buf, len - 1, "$%llu", (long long unsigned int)d.var);
+		}
+		else if(mode == act)
+		{
+			snprintf(buf, len - 1, "a_%d_%d_%d_%d", d.src.funcIndex, d.src.actionIndex, d.src.handIndex, d.src.axisIndex);
+		}
+	}
+	int ArgCount() const
+	{
+		if(mode == func)
+			return d.funcindex?3:1;
+		if(mode != op)
+			return 0;
+		return CalcArgCount(d.ch[0], d.ch[1]);
+	}
+	float Val() const
+	{
+		if(mode == val)
+			return d.val;
+		if(mode == act)
+			return d.src.GetValue();
+		if(mode == var)
+			return *d.var;
+		return 0;
+	}
+#define StackPop(var) auto var = stack[--sp].Val()
+#define StackPush(val) stack[sp++] = val
+	template<size_t stacksize>
+	bool Calculate(RPNToken (&stack)[stacksize], size_t &sp)
+	{
+		int ac = ArgCount();
+		if(sp < ac)
+			return false;
+		if(mode == func)
+		{
+			if(d.funcindex == 0)
+			{
+				StackPop(val1);
+				StackPush(sinf(val1));
+				return true;
+			}
+			if(d.funcindex == 1)
+			{
+				StackPop(val3);
+				StackPop(val2);
+				StackPop(val1);
+				StackPush(val1 + val2 + val3);
+				return true;
+			}
+		}
+		else if(mode == op)
+		{
+			if(ac == 2)
+			{
+				if(d.ch[0] == '=' && d.ch[1] != '=' && stack[sp - 2].mode == var)
+				{
+					StackPop(val2);
+					*stack[sp - 1].d.var = val2;
+					return true;
+				}
+				StackPop(val2);
+				StackPop(val1);
+				float res = CalcOp2(val1, val2, Op(), d.ch[1]);
+				StackPush(res);
+				return true;
+			}
+			if(ac == 1)
+			{
+				StackPop(val1);
+				if(Op() == '!')
+				{
+					StackPush(!val1);
+					return true;
+				}
+				else return false;
+			}
+		}
+
+		return false;
+	}
+#undef StackPop
+#undef StackPush
+};
+
 
 struct Layer
 {
@@ -619,21 +822,6 @@ struct Layer
 		return XR_ERROR_HANDLE_INVALID; \
 	}
 
-	// custom action set or server app should write data here
-	struct ActionSource
-	{
-		int actionIndex;
-		int funcIndex;
-		int axisIndex;
-		int handIndex;
-		//SourceSection *mpConfig;
-		void *priv;
-		float GetValue()
-		{
-			return actionFuncs[funcIndex](priv, actionIndex, handIndex, axisIndex);
-		}
-	};
-
 	struct ActionMap
 	{
 		//ActionMapSection *mpConfig;
@@ -688,6 +876,10 @@ struct Layer
 			typedState[hand].currentState.y = baseState[hand].map.GetAxis(1);
 		}
 	};
+	struct RPNInstance
+	{
+		GrowArray<RPNToken> data;
+	};
 
 	struct SessionState
 	{
@@ -695,6 +887,7 @@ struct Layer
 		XrSessionCreateInfo info = { XR_TYPE_UNKNOWN };
 		XrActionSet *mActionSets = nullptr;
 		size_t mActionSetsCount = 0;
+		Layer *mpInstance;
 
 		// application actions
 		HashArrayMap<XrAction, ActionBoolean> mActionsBoolean;
@@ -712,6 +905,9 @@ struct Layer
 		HashArrayMap<const char*, int> mVec2Indexes;
 
 		HashArrayMap<const char*, float[2], 0> mExternalSources;
+
+		HashMap<const char*, RPNInstance> mRPNs;
+		GrowArray<RPNInstance*> mRPNPointers;
 
 		~SessionState()
 		{
@@ -744,11 +940,14 @@ struct Layer
 	HashMap<XrPath, GrowArray<XrActionSuggestedBinding>> mLayerSuggestedBindings;
 	bool mfLayerActionSetSuggested = false;
 
+	HashMap<const char *, float> mRPNVariables;
+
 	HashMap<XrSession, SessionState> mSessions;
 	SessionState *mpActiveSession;
 	// must be session-private, but always need most recent
 	XrTime mPredictedTime;
 	bool mTriggerInteractionProfileChanged, mTriggerInteractionProfileChangedOld;
+
 
 	XrResult noinline thisLayer_xrCreateSession(XrInstance instance, const XrSessionCreateInfo *createInfo, XrSession *session)
 	{
@@ -758,6 +957,7 @@ struct Layer
 		{
 			SessionState &w = GetSession(*session);
 			w.info = *createInfo;
+			w.mpInstance = this;
 		}
 		return res;
 	}
@@ -1305,30 +1505,45 @@ struct Layer
 			hand = HandFromConfig(*c, nullptr);
 		return c;
 	}
+	bool FillSource(ActionSource &s, SessionState &w, SourceSection *c, const char *mapping )
+	{
+		int t = c->actionType;
+		bool ret = true;
+		if( t < SourceSection::action_external)
+			s.actionIndex = AddSourceToSession( w, (XrActionType)t, c->h.name );
+		else
+			s.actionIndex = AddExternalSource( w, c->h.name );
+		if(s.actionIndex < 0)
+			ret = false, t = 1, s.actionIndex = 0;
+		s.funcIndex = t - 1;
+		s.priv = &w;
+		s.axisIndex = !!strstr(mapping, "[1]");
+		return ret;
+	}
 
 	void AxisFromConfig(Action &a, int hand, const char *mapping, int axis, SessionState &w)
 	{
 		SourceSection *c = SourceFromConfig(mapping, a.baseState[hand].map.src[axis].handIndex);
 		if(!c)
 		{
+			GrowArray<RPNToken> tokens;
+			if(!ParseTokens(&w, tokens, mapping))
+				return;
+			RPNInstance &inst = w.mRPNs[mapping];
+			if(!ShuntingYard(tokens, inst.data))
+				return;
+			a.baseState[hand].map.src[axis].actionIndex = w.mRPNPointers.count;
+			a.baseState[hand].map.src[axis].funcIndex = 4;
+			a.baseState[hand].map.src[axis].priv = &w;
+			w.mRPNPointers.Add(&inst);
+			a.baseState[hand].hasAxisMapping = true;
 			return;
 		}
 
-		int t = c->actionType;
-		if( t < SourceSection::action_external)
-			a.baseState[hand].map.src[axis].actionIndex = AddSourceToSession( w, (XrActionType)t, c->h.name );
-		else
-			a.baseState[hand].map.src[axis].actionIndex = AddExternalSource( w, c->h.name );
-		if(a.baseState[hand].map.src[axis].actionIndex < 0)
-		{
+		if(!FillSource( a.baseState[hand].map.src[axis], w, c, mapping))
 			Log( "Invalid action type: axis%d  %s %s\n", axis, mapping, c->h.name );
-			t = 1;
-			a.baseState[hand].map.src[axis].actionIndex  = 0;
-		}
-		a.baseState[hand].map.src[axis].funcIndex = t - 1;
-		a.baseState[hand].map.src[axis].priv = &w;
-		a.baseState[hand].map.src[axis].axisIndex = !!strstr(mapping, "[1]");
-		a.baseState[hand].hasAxisMapping = true;
+		else
+			a.baseState[hand].hasAxisMapping = true;
 	}
 
 	void ApplyActionMap(SessionState &w, Action &a, ActionMapSection *s, int hand)
@@ -1558,29 +1773,52 @@ struct Layer
 #endif
 };
 
-float GetBoolAction(void *priv, int act, int hand, int ax)
+static float GetBoolAction(void *priv, int act, int hand, int ax)
 {
 	Layer::SessionState *w = (Layer::SessionState *)priv;
 	return w->mLayerActionsBoolean[act].typedState[hand].currentState;
 }
 
-float GetFloatAction(void *priv, int act, int hand, int ax)
+static float GetFloatAction(void *priv, int act, int hand, int ax)
 {
 	Layer::SessionState *w = (Layer::SessionState *)priv;
 	return w->mLayerActionsFloat[act].typedState[hand].currentState;
 }
 
-float GetVec2Action(void *priv, int act, int hand, int ax)
+static float GetVec2Action(void *priv, int act, int hand, int ax)
 {
 	Layer::SessionState *w = (Layer::SessionState *)priv;
 	return ax?w->mLayerActionsVec2[act].typedState[hand].currentState.y
 			: w->mLayerActionsVec2[act].typedState[hand].currentState.x;
 }
 
-float GetExtAction(void *priv, int act, int hand, int ax)
+static float GetExtAction(void *priv, int act, int hand, int ax)
 {
 	Layer::SessionState *w = (Layer::SessionState *)priv;
 	return w->mExternalSources.table[0][act].v[ax];
+}
+
+static float GetRPNAction(void *priv, int act, int hand, int ax)
+{
+	Layer::SessionState *w = (Layer::SessionState *)priv;
+	return Calculate(w->mRPNPointers[act]->data);
+}
+static bool GetSource( void *priv, ActionSource &s, const char *src )
+{
+	if(!priv)
+		return false;
+	Layer::SessionState *w = (Layer::SessionState *)priv;
+	SourceSection *c = w->mpInstance->SourceFromConfig(src, s.handIndex);
+	if(!c)
+		return false;
+	return w->mpInstance->FillSource(s, *w, c, src);
+}
+static float *GetVar( void *priv, const char *v )
+{
+	if(!priv)
+		return (float*)(uint64_t)atoi(v);
+	Layer::SessionState *w = (Layer::SessionState *)priv;
+	return &w->mpInstance->mRPNVariables[v];
 }
 
 
