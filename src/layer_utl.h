@@ -49,3 +49,5 @@ forceinline static inline size_t HashFunc(const SubStr &key)
 		hash = hash * 31 + *s++;
 	return hash & (TblSize - 1);
 }
+
+#define Log(...) FPrint(stderr, __VA_ARGS__)
