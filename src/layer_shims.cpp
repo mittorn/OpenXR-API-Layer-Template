@@ -505,33 +505,29 @@ struct Layer
 						Log("Missing bindings for source %s\n", node->v.h.name);
 						continue;
 					}
-
+					SubStr s = {str, str + strlen(str)};
 					do
 					{
 						XrPath path;
 						XrPath profile = defaultProfile;
-						const char *pstr = str;
-						const char *delim = strchr(str, ':');
-						if(delim)
-						{
-							char pr[delim - str + 1];
-							memcpy(pr, str, delim - str);
-							pr[delim - str] = 0;
-							nextLayer_xrStringToPath(mInstance, pr, &profile);
-							str = delim + 1;
-						}
-						str = strchr(pstr, ',');
-						if(!str)
-							str = pstr + strlen(pstr) + 1;
-						else str++;
+						SubStr n, s1;
 
-						char bnd[str - pstr];
-						memcpy(bnd, pstr, str - pstr - 1);
-						bnd[str - pstr - 1] = 0;
+						if(s.Split2(n, s1, ':'))
+						{
+							char pr[n.Len() + 1];
+							n.CopyTo(pr,n.Len() + 1);
+							nextLayer_xrStringToPath(mInstance, pr, &profile);
+							s = s1;
+						}
+						if(!s.Split2(n, s1, ','))
+							n = s, s = "";
+						else
+							s = s1;
+						char bnd[n.Len() + 1];
+						n.CopyTo(bnd, n.Len() + 1);
 						nextLayer_xrStringToPath(mInstance, bnd, &path);
 						mLayerSuggestedBindings[profile].Add({act.action,path});
-					}while(*(str-1));
-
+					} while(s.Len());
 				}
 			}
 		}

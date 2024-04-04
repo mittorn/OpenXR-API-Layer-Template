@@ -30,7 +30,7 @@ struct SectionHeader_
 	}
 };
 #define SectionHeader(PREFIX) \
-constexpr static const char * prefix = #PREFIX; \
+constexpr static const char prefix[] = #PREFIX; \
 	SectionHeader_ h;
 
 template <typename S>
@@ -49,15 +49,12 @@ struct Sections
 		{
 			for(auto *node = l.parser.mDict.table[i]; node; node = node->n)
 			{
-				char prefix[256];
-				// todo: remove raw section names from config
-				int len = SBPrint(prefix, "[%s.", S::prefix);
-				if(!strncmp(node->k, prefix, len-1))
+				SubStr s = {node->k + 1, node->k + strlen(node->k) - 1};
+				SubStr sp, sn;
+				if( s.Split2(sp, sn, '.') && sp.Equals(S::prefix))
 				{
 					char suffix[32];
-					int nlen = strlen(node->k + len - 1) - 1;
-					memcpy( suffix, node->k + len - 1, nlen);
-					suffix[nlen] = 0;
+					sn.CopyTo(suffix);
 					auto *sectionNode = mSections.GetOrAllocate(suffix);
 					S& section = sectionNode->v;
 					l.CurrentSection = &node->v;
@@ -294,7 +291,7 @@ static int PathIndexFromSuffix(const SubStr &suffix)
 	SubStr s1, s2;
 	if(!suffix.Split2(s1, s2, '['))
 		s1 = suffix;
-	else if(s1.Len() > 2)
+	else if(s2.Len() > 2)
 		return USER_INVALID;
 	for(i = 0; i < USER_INVALID; i++)
 		if(s1.Equals(SubStr(gszUserSuffixes[i],strlen(gszUserSuffixes[i]))))
