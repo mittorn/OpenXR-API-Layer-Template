@@ -23,19 +23,41 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 */
-#include "layer_utl.h"
+#include "container_utl.h"
 #include <string.h>
 #include <stdio.h>
+
+struct IniParserLine
+{
+	char *begin = nullptr, *end = nullptr;
+	IniParserLine(){}
+	IniParserLine(char *b, char *e) : begin(b), end(e) {}
+	IniParserLine(const char *str) : begin((char*)str), end((char*)str+strlen(str)){}
+	operator const char*(){ return begin;}
+};
+
+template<size_t TblSize>
+forceinline static inline size_t HashFunc(const IniParserLine &key)
+{
+	size_t hash = 7;
+	const unsigned char *s = (const unsigned char*)key.begin;
+	while(s < (const unsigned char*)key.end)
+		hash = hash * 31 + *s++;
+	return hash & (TblSize - 1);
+}
+
+template<>
+inline bool KeyCompare(const IniParserLine &a, const IniParserLine &b)
+{
+	return ((a.end - a.begin) == (b.end - b.begin)) && !memcmp(a.begin, b.begin, a.end - a.begin);
+}
 
 struct IniParser
 {
 	char *mpszData = nullptr;
 	size_t muiLength;
-	struct Line
-	{
-		char *begin, *end;
-	};
-	HashMap<const char*, HashArrayMap<const char *, const char*>> mDict;
+
+	HashMap<IniParserLine, HashArrayMap<IniParserLine, IniParserLine>> mDict;
 	static bool _CharIn(char ch, const char *s)
 	{
 		char c;
@@ -60,7 +82,7 @@ struct IniParser
 		}
 		return pstr + 1;
 	}
-	size_t _GetLine(size_t start, Line &l)
+	size_t _GetLine(size_t start, IniParserLine &l)
 	{
 		char *end = mpszData + muiLength;
 		char *pstr = mpszData + start;
@@ -94,9 +116,9 @@ struct IniParser
 			return;
 		size_t pos= 0;
 		static char root_section[] = "[root]";
-		Line section = {&root_section[0], &root_section[5]};
-		HashArrayMap<const char *, const char*> *sectDict = &mDict[section.begin];
-		Line l;
+		IniParserLine section = {&root_section[0], &root_section[5]};
+		HashArrayMap<IniParserLine, IniParserLine> *sectDict = &mDict[section.begin];
+		IniParserLine l;
 		while((pos = _GetLine(pos, l)))
 		{
 			//printf("rline %s\n", l.begin);
@@ -113,7 +135,7 @@ struct IniParser
 				if(*(l.end - 1) == ']')
 				{
 					section = l;
-					sectDict = &mDict[section.begin];
+					sectDict = &mDict[section];
 				}
 				else
 				{
@@ -124,13 +146,13 @@ struct IniParser
 			char *assign = _LFind(l.begin, l.end, "=", false);
 			if(*assign == '=')
 			{
-				Line var, val;
+				IniParserLine var, val;
 				var.begin = l.begin;
 				var.end = _RFind(assign, l.begin," \t\n\r", true);
 				*var.end = 0;
 				val.begin = _LFind(assign + 1, l.end," \t\n\r", true);
 				val.end = l.end;
-				(*sectDict)[var.begin] = val.begin;
+				(*sectDict)[var] = val;
 			}
 			if(pos >= muiLength)
 				break;

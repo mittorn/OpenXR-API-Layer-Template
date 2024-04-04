@@ -7,7 +7,7 @@
 
 struct ConfigLoader
 {
-	HashArrayMap<const char*, const char*> *CurrentSection;
+	HashArrayMap<IniParserLine, IniParserLine> *CurrentSection;
 	const char *CurrentSectionName = "[root]";
 	void *CurrentSectionPointer = nullptr;
 	HashMap<const char*, void*> parsedSecions;
@@ -43,7 +43,7 @@ struct Sections
 	Sections& operator=(const Sections &) = delete;
 	Sections(ConfigLoader &l)
 	{
-		HashArrayMap<const char*, const char*> *PreviousSection = l.CurrentSection;
+		HashArrayMap<IniParserLine, IniParserLine> *PreviousSection = l.CurrentSection;
 		void *PrevioisSectionPointer = l.CurrentSectionPointer;
 		for(int i = 0; i < l.parser.mDict.TblSize; i++)
 		{
@@ -98,8 +98,8 @@ struct SectionReference_
 	}
 	SectionReference_(ConfigLoader &l)
 	{
-		const char *&str = (*l.CurrentSection)[name];
-		if(str)
+		IniParserLine &str = (*l.CurrentSection)[name];
+		if(str.begin)
 		{
 			char sectionName[256];
 			SubStr s{str,strchr(str, '.')};
@@ -118,7 +118,7 @@ struct SectionReference_
 			if(!ptr)
 				l.forwardSections[n->k].Add((void**)&ptr);
 		}
-		str = nullptr;
+		str = {nullptr, nullptr};
 	}
 };
 #define SectionReference(type,name) \
@@ -140,10 +140,10 @@ struct Option_
 	Option_(){}
 	Option_(const T &def):val(def){}
 	Option_(ConfigLoader &l){
-		const char *&str = (*l.CurrentSection)[name];
-		if(str)
+		IniParserLine &str = (*l.CurrentSection)[name];
+		if(str.begin)
 			val = (T)atof(str);
-		str = nullptr;
+		str ={nullptr, nullptr};
 	}
 };
 #define Option(type,name) \
@@ -171,10 +171,10 @@ struct StringOption_
 		val = nullptr;
 	}
 	StringOption_(ConfigLoader &l){
-		const char *&str = (*l.CurrentSection)[name];
-		if(str)
+		IniParserLine &str = (*l.CurrentSection)[name];
+		if(str.begin)
 			val = strdup(str);
-		str = nullptr;
+		str = {nullptr, nullptr};
 	}
 };
 
@@ -223,14 +223,14 @@ struct EnumOption_
 	EnumOption_& operator=(const EnumOption_ &) = delete;
 	EnumOption_(){}
 	EnumOption_(ConfigLoader &l){
-		const char *&str = (*l.CurrentSection)[name];
-		if(str)
+		IniParserLine &str = (*l.CurrentSection)[name];
+		if(str.begin)
 		{
 			val = (T)GetEnum(SCHEME, str);
 		}
 		else
 			val = (T)0;
-		str = nullptr;
+		str = {nullptr, nullptr};
 	}
 };
 
@@ -316,7 +316,7 @@ struct BindingProfileSection
 					char sectionName[256];
 					if(!l.CurrentSection->table[i][j].v)
 						continue;
-					SBPrint(sectionName, "[%s.%s]", ActionMapSection::prefix, l.CurrentSection->table[i][j].v);
+					SBPrint(sectionName, "[%s.%s]", ActionMapSection::prefix, l.CurrentSection->table[i][j].v.begin );
 					auto *n = l.parser.mDict.GetNode(sectionName);
 					if(!n)
 					{
@@ -342,7 +342,7 @@ struct BindingProfileSection
 						maps[USER_INVALID][l.CurrentSection->table[i][j].k] = map;
 					}
 
-					l.CurrentSection->table[i][j].v = nullptr;
+					l.CurrentSection->table[i][j].v = {nullptr, nullptr};
 				}
 			}
 		}
@@ -377,8 +377,8 @@ static void LoadConfig(Config *c)
 		for(auto *node = p.mDict.table[i]; node; node = node->n)
 			for(int j = 0; j < node->v.TblSize; j++)
 				for(int k = 0; k < node->v.table[j].count; k++ )
-					if(node->v.table[j][k].v)
-						Log("Section %s: unused config key %s = %s\n", node->k, node->v.table[j][k].k, node->v.table[j][k].v);
+					if(node->v.table[j][k].v.begin)
+						Log("Section %s: unused config key %s = %s\n", node->k, node->v.table[j][k].k.begin, node->v.table[j][k].v.begin);
 
 	Log("ServerPort %d\n", (int)c->serverPort);
 }
