@@ -12,8 +12,6 @@
 #include <stdio.h>
 #include <math.h>
 #include "layer_utl.h"
-#define FMT_ENABLE_STDIO
-#include "fmt_util.h"
 #include "thread_utl.h"
 #include "struct_utl.h"
 #include "ini_parser.h"
@@ -126,19 +124,6 @@ struct EventPoller
 	}
 };
 
-// stringview-like
-struct SubString
-{
-	const char *begin, *end;
-};
-// fmt_util extension
-template<typename Buf>
-forceinline constexpr static inline void ConvertS(Buf &s, const SubString &arg)
-{
-	for(const char *str = arg.begin; str < arg.end;str++)
-		s.w(*str);
-}
-
 struct ConfigLoader
 {
 	HashArrayMap<const char*, const char*> *CurrentSection;
@@ -239,8 +224,7 @@ struct SectionReference_
 		if(str)
 		{
 			char sectionName[256];
-			SubString s{str};
-			s.end = strchr(str, '.');
+			SubStr s{str,strchr(str, '.')};
 			if(!s.end)
 				s.end = s.begin + strlen(str);
 			else
@@ -423,15 +407,16 @@ enum eUserPaths{
 	USER_PATH_COUNT
 };
 
-static int PathIndexFromSuffix(const char *suffix)
+static int PathIndexFromSuffix(const SubStr &suffix)
 {
 	int i;
-	int len = strlen(suffix);
-	const char *end = strchr(suffix, '[');
-	if(end)
-		len = end - suffix;
+	SubStr s1, s2;
+	if(!suffix.Split2(s1, s2, '['))
+		s1 = suffix;
+	else if(s1.Len() > 2)
+		return USER_INVALID;
 	for(i = 0; i < USER_INVALID; i++)
-		if(!strncmp(suffix, gszUserSuffixes[i], len))
+		if(s1.Equals(SubStr(gszUserSuffixes[i],strlen(gszUserSuffixes[i]))))
 			break;
 	return i;
 }
@@ -464,14 +449,13 @@ struct BindingProfileSection
 					ActionMapSection *map = (ActionMapSection *)l.parsedSecions[n->k];
 					if(!map)
 						continue;
-					const char *suffix = strchr(l.CurrentSection->table[i][j].k, '.');
-					if(suffix)
+					SubStr kk = SubStr(l.CurrentSection->table[i][j].k, strlen(l.CurrentSection->table[i][j].k));
+					SubStr nn, s;
+					if(kk.Split2(nn, s, '.'))
 					{
-						char str[suffix - l.CurrentSection->table[i][j].k + 1];
-						memcpy(str, l.CurrentSection->table[i][j].k, suffix - l.CurrentSection->table[i][j].k);
-						str[suffix - l.CurrentSection->table[i][j].k] = 0;
-						suffix++;
-						maps[PathIndexFromSuffix(suffix)][str] = map;
+						char str[nn.Len() + 1];
+						nn.CopyTo(str, nn.Len() + 1);
+						maps[PathIndexFromSuffix(s)][str] = map;
 					}
 					else
 					{
@@ -558,8 +542,8 @@ struct ActionSource
 	}
 };
 
-static bool GetSource( void *priv, ActionSource &s, const char *src );
-static float *GetVar( void *priv, const char *v );
+static bool GetSource( void *priv, ActionSource &s, const SubStr &src );
+static float *GetVar(void *priv, const SubStr &v );
 struct RPNToken
 {
 	enum
@@ -581,7 +565,8 @@ struct RPNToken
 	RPNToken(){}
 	RPNToken(void *priv, const char *begin, const char *end, bool _op)
 	{
-		if(!strncmp(begin, "sin", end - begin) || !strncmp(begin, "func3", end - begin))
+		SubStr tok{begin,end};
+		if(tok.Equals("sin") || tok.Equals("func3"))
 		{
 			mode = func;
 			d.funcindex = *begin == 'f';
@@ -595,28 +580,28 @@ struct RPNToken
 		}
 		else if(*begin == '$')
 		{
-			char v[32];
+			/*char v[32];
 			char *s = v;
 			begin++;
 			while(begin < end && s - v < 31)
 				*s++ = *begin++;
-			*s = 0;
+			*s = 0;*/
 			mode = var;
-			d.var = GetVar( priv, v );
+			d.var = GetVar( priv, tok.GetSubStr(1));
 		}
 		else
 		{
-			char v[32];
+			/*char v[32];
 			char *s = v;
 			while(begin < end && s - v < 31)
 				*s++ = *begin++;
-			*s = 0;
-			if(GetSource(priv, d.src, v))
+			*s = 0;*/
+			if( GetSource( priv, d.src, tok))
 				mode = act;
 			else
 			{
 				mode = val;
-				d.val = atof(v);
+				d.val = atof(tok.begin);
 			}
 		}
 	}
@@ -940,7 +925,7 @@ struct Layer
 	HashMap<XrPath, GrowArray<XrActionSuggestedBinding>> mLayerSuggestedBindings;
 	bool mfLayerActionSetSuggested = false;
 
-	HashMap<const char *, float> mRPNVariables;
+	HashMap<SubStr, float> mRPNVariables;
 
 	HashMap<XrSession, SessionState> mSessions;
 	SessionState *mpActiveSession;
@@ -1307,15 +1292,16 @@ struct Layer
 				case EVENT_POLL_MAP_DIRECT_SOURCE:
 					{
 						Action *a = FindAppSessionAction(w,ev.str1);
+						SubStr suf{""};
 						char *suffix = (char*)strchr(ev.str2, '.');
 						if(suffix)
-							*suffix++ = 0;
+							*suffix++ = 0, suf = SubStr(suffix, strlen(suffix));
 						if(a)
 						{
 							SourceSection *s = config.sources.mSections.GetPtr(ev.str2);
 							if((int)s->actionType == (int)a->info.actionType)
 								a->baseState[ev.i1].map.actionIndex = AddSourceToSession(w, a->info.actionType, s->h.name );
-							a->baseState[ev.i1].map.handIndex = HandFromConfig(*s, suffix);
+							a->baseState[ev.i1].map.handIndex = HandFromConfig(*s, suf);
 						}
 					}
 				break;
@@ -1466,9 +1452,9 @@ struct Layer
 		return -1;
 	}
 
-	int HandFromConfig(const SourceSection &c, const char *suffix)
+	int HandFromConfig(const SourceSection &c, const SubStr &suffix)
 	{
-		if(suffix)
+		if(suffix.Len())
 			return PathIndexFromSuffix(suffix);
 		else if(!c.subactionOverride.val)
 			return 1;
@@ -1482,30 +1468,30 @@ struct Layer
 		auto *n = w.mExternalSources.GetOrAllocate(name);
 		return n - w.mExternalSources.table[0].mem;
 	}
-	SourceSection *SourceFromConfig(const char *name, int &hand)
+	SourceSection *SourceFromConfig(const SubStr &name, int &hand)
 	{
-		char sectionName[256];
-		const char *suffix = strchr(name, '.');
-		hand = USER_INVALID;
-		if(suffix)
-			hand = PathIndexFromSuffix(++suffix);
-		if(hand != USER_INVALID && suffix && (suffix - name < 255 ))
+		//SubStr ss = SubStr(name, strlen(name));
+		SubStr n, s;
+		if(name.Split2(n,s,'.'))
 		{
-			strncpy(sectionName, name, suffix - name - 1);
-			sectionName[suffix - name - 1] = 0;
-			const char *end = strchr(suffix, '[');
-			if(end && suffix + strlen(suffix) > end + 3)
-				return nullptr;
+			hand = PathIndexFromSuffix(s);
+			if(hand == USER_INVALID)
+				return  nullptr;
 		}
 		else
-			strncpy(sectionName, name, 255);
-		sectionName[255] = 0;
+		{
+			hand = USER_INVALID;
+			n = name;
+		}
+
+		char sectionName[256];
+		n.CopyTo(sectionName);
 		SourceSection *c = config.sources.mSections.GetPtr(sectionName);
 		if(c && hand == USER_INVALID)
-			hand = HandFromConfig(*c, nullptr);
+			hand = HandFromConfig(*c, "");
 		return c;
 	}
-	bool FillSource(ActionSource &s, SessionState &w, SourceSection *c, const char *mapping )
+	bool FillSource(ActionSource &s, SessionState &w, SourceSection *c, const SubStr &mapping )
 	{
 		int t = c->actionType;
 		bool ret = true;
@@ -1517,13 +1503,14 @@ struct Layer
 			ret = false, t = 1, s.actionIndex = 0;
 		s.funcIndex = t - 1;
 		s.priv = &w;
-		s.axisIndex = !!strstr(mapping, "[1]");
+		s.axisIndex = mapping.Contains( "[1]");
 		return ret;
 	}
 
 	void AxisFromConfig(Action &a, int hand, const char *mapping, int axis, SessionState &w)
 	{
-		SourceSection *c = SourceFromConfig(mapping, a.baseState[hand].map.src[axis].handIndex);
+		SubStr m = SubStr(mapping, mapping + strlen(mapping));
+		SourceSection *c = SourceFromConfig(m, a.baseState[hand].map.src[axis].handIndex);
 		if(!c)
 		{
 			GrowArray<RPNToken> tokens;
@@ -1540,7 +1527,7 @@ struct Layer
 			return;
 		}
 
-		if(!FillSource( a.baseState[hand].map.src[axis], w, c, mapping))
+		if(!FillSource( a.baseState[hand].map.src[axis], w, c, m))
 			Log( "Invalid action type: axis%d  %s %s\n", axis, mapping, c->h.name );
 		else
 			a.baseState[hand].hasAxisMapping = true;
@@ -1556,7 +1543,8 @@ struct Layer
 				a.baseState[hand].map.actionIndex = AddSourceToSession(w, a.info.actionType, s->map.ptr->h.name );
 			if(a.baseState[hand].map.actionIndex < 0)
 				Log( "Invalid direct action map (types must be same): %s %s %s %d\n", s->h.name, s->map.suffix? s->map.suffix: "(auto)", s->map.ptr->h.name, hand );
-			a.baseState[hand].map.handIndex = HandFromConfig(*s->map.ptr, s->map.suffix);
+			SubStr suf = s->map.suffix? SubStr(s->map.suffix, strlen(s->map.suffix)): "";
+			a.baseState[hand].map.handIndex = HandFromConfig(*s->map.ptr, suf);
 		}
 
 		if(s->axis1.val)
@@ -1803,7 +1791,7 @@ static float GetRPNAction(void *priv, int act, int hand, int ax)
 	Layer::SessionState *w = (Layer::SessionState *)priv;
 	return Calculate(w->mRPNPointers[act]->data);
 }
-static bool GetSource( void *priv, ActionSource &s, const char *src )
+static bool GetSource( void *priv, ActionSource &s, const SubStr &src )
 {
 	if(!priv)
 		return false;
@@ -1813,10 +1801,10 @@ static bool GetSource( void *priv, ActionSource &s, const char *src )
 		return false;
 	return w->mpInstance->FillSource(s, *w, c, src);
 }
-static float *GetVar( void *priv, const char *v )
+static float *GetVar( void *priv, const SubStr &v )
 {
 	if(!priv)
-		return (float*)(uint64_t)atoi(v);
+		return (float*)(uint64_t)atoi(v.begin);
 	Layer::SessionState *w = (Layer::SessionState *)priv;
 	return &w->mpInstance->mRPNVariables[v];
 }

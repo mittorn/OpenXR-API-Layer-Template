@@ -96,7 +96,7 @@ bool ParseTokens( void *priv, GrowArray<Token> &arr, const char *string)
 	bool is_op = IsOperatorToken(string[0]);;
 	const char *tok_begin = string;
 	char c;
-	while(c = *string++)
+	while((c = *string++))
 	{
 		//printf("%c %d\n", c, is_op);
 		if(IsOperatorToken(c) && !(is_op && (c == '-')))
