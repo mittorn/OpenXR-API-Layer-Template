@@ -52,4 +52,14 @@ forceinline static inline size_t HashFunc(const SubStr &key)
 	return hash & (TblSize - 1);
 }
 
+template <size_t l>
+constexpr size_t ConstHashFunc(const char (&ch)[l])
+{
+	size_t hash = 7;
+	for(int i = 0; i < l - 1; i++)
+		hash = hash * 31 + ch[i];
+	return hash;
+}
+
+
 #define Log(...) FPrint(stderr, __VA_ARGS__)
