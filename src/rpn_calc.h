@@ -263,7 +263,7 @@ bool DumpOrder(GrowArray<Token> &arr)
 }
 
 template <typename Numeric = float, size_t stacksize = 32, typename Token>
-Numeric Calculate(GrowArray<Token> &arr)
+Numeric Calculate(void *priv, GrowArray<Token> &arr)
 {
 	Token stack[stacksize];
 	size_t sp = 0;
@@ -276,7 +276,7 @@ Numeric Calculate(GrowArray<Token> &arr)
 		if(t.IsIdent())
 			stack[sp++] = t;
 		else if(t.IsOperator() || t.IsFunction())
-			if(!t.Calculate(stack, sp))
+			if(!t.Calculate(priv, stack, sp))
 				return -1;
 		pos++;
 	}
@@ -341,7 +341,7 @@ struct StringToken
 #define StackPop(var) auto var = stack[--sp].Val()
 #define StackPush(val) stack[sp++] = val
 	template<size_t stacksize>
-	bool Calculate(StringToken (&stack)[stacksize], size_t &sp)
+	bool Calculate(void *priv, StringToken (&stack)[stacksize], size_t &sp)
 	{
 		int ac = ArgCount();
 		if(sp < ac)
@@ -493,7 +493,7 @@ struct NumericToken
 #define StackPop(var) auto var = stack[--sp].Val()
 #define StackPush(val) stack[sp++] = val
 	template<size_t stacksize>
-	bool Calculate(NumericToken (&stack)[stacksize], size_t &sp)
+	bool Calculate(void *priv, NumericToken (&stack)[stacksize], size_t &sp)
 	{
 		int ac = ArgCount();
 		if(sp < ac)
@@ -567,7 +567,7 @@ int main(int argc, const char **argv)
 			printf("o %s %d|\n", buf, out[i].Op());
 		}
 		DumpOrder(out);
-		printf("Value %f\n", Calculate<double>(out));
+		printf("Value %f\n", Calculate<double>(nullptr, out));
 	}
 	else for(int i = 0; i < out.count; i++)
 		{
@@ -594,7 +594,7 @@ int main(int argc, const char **argv)
 			printf("o %s %d|\n", buf, out1[i].Op());
 		}
 		DumpOrder(out1);
-		printf("Value %f\n", Calculate<double>(out1));
+		printf("Value %f\n", Calculate<double>(nullptr, out1));
 	}
 	else for(int i = 0; i < out1.count; i++)
 		{

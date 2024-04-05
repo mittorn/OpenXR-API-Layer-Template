@@ -39,11 +39,11 @@ constexpr float (*actionFuncs[])(void *priv, int act, int hand, int ax) =
 
 struct ActionSource
 {
-	int actionIndex;
-	int funcIndex;
-	int axisIndex;
-	int handIndex;
 	void *priv;
+	int actionIndex;
+	uint8_t funcIndex;
+	uint8_t axisIndex;
+	uint8_t handIndex;
 	float GetValue() const
 	{
 		return actionFuncs[funcIndex](priv, actionIndex, handIndex, axisIndex);
@@ -52,6 +52,48 @@ struct ActionSource
 
 static bool GetSource( void *priv, ActionSource &s, const SubStr &src );
 static float *GetVar(void *priv, const SubStr &v );
+
+// todo: compile-time map?
+struct
+{
+	const char *name;
+	unsigned int index;
+} gFuncMap[] =
+{
+	{"sin", (0U << 2) | 1},
+	{"cos", (1U << 2) | 1}
+};
+
+
+float func_sin(void *priv, float f)
+{
+	return sin(f);
+}
+
+float func_cos(void *priv, float f)
+{
+	return cos(f);
+}
+
+float (*funcs0[1])(void *priv) = {};
+float (*funcs1[])(void *priv, float val1) = {func_sin, func_cos};
+float (*funcs2[1])(void *priv, float val1, float val2) = {};
+float (*funcs3[1])(void *priv, float val1, float val2, float val3) = {};
+
+unsigned int GetFunc(const SubStr &name)
+{
+	int i = 0;
+	char name1[32];
+	name.CopyTo(name1);
+	while(i < sizeof(gFuncMap)/sizeof(gFuncMap[0]) )
+	{
+		if(!strcmp(gFuncMap[i].name, name1))
+			return gFuncMap[i].index;
+		i++;
+	}
+	return 0xFFFFFFFF;
+}
+
 struct RPNToken
 {
 	enum
@@ -66,7 +108,7 @@ struct RPNToken
 	{
 		float val;
 		char ch[2];
-		int funcindex;
+		unsigned int funcindex;
 		float *var;
 		ActionSource src;
 	} d;
@@ -74,10 +116,9 @@ struct RPNToken
 	RPNToken(void *priv, const char *begin, const char *end, bool _op)
 	{
 		SubStr tok{begin,end};
-		if(tok.Equals("sin") || tok.Equals("func3"))
+		if((d.funcindex = GetFunc(tok)) != 0xFFFFFFFF)
 		{
 			mode = func;
-			d.funcindex = *begin == 'f';
 		}
 		else if(_op)
 		{
@@ -152,7 +193,7 @@ struct RPNToken
 	int ArgCount() const
 	{
 		if(mode == func)
-			return d.funcindex?3:1;
+			return d.funcindex & 3;
 		if(mode != op)
 			return 0;
 		return CalcArgCount(d.ch[0], d.ch[1]);
@@ -170,25 +211,38 @@ struct RPNToken
 #define StackPop(var) auto var = stack[--sp].Val()
 #define StackPush(val) stack[sp++] = val
 	template<size_t stacksize>
-	bool Calculate(RPNToken (&stack)[stacksize], size_t &sp)
+	bool Calculate(void *priv, RPNToken (&stack)[stacksize], size_t &sp)
 	{
 		int ac = ArgCount();
 		if(sp < ac)
 			return false;
 		if(mode == func)
 		{
-			if(d.funcindex == 0)
+			unsigned int funcidx = d.funcindex >> 2;
+			if(ac == 0)
 			{
-				StackPop(val1);
-				StackPush(sinf(val1));
+				StackPush(funcs0[funcidx](priv));
 				return true;
 			}
-			if(d.funcindex == 1)
+			if(ac == 1)
+			{
+				StackPop(val1);
+				StackPush(funcs1[funcidx](priv, val1));
+				return true;
+			}
+			if(ac == 2)
+			{
+				StackPop(val2);
+				StackPop(val1);
+				StackPush(funcs2[funcidx](priv, val1, val2));
+				return true;
+			}
+			if(ac == 3)
 			{
 				StackPop(val3);
 				StackPop(val2);
 				StackPop(val1);
-				StackPush(val1 + val2 + val3);
+				StackPush(funcs3[funcidx](priv, val1, val2, val3));
 				return true;
 			}
 		}
@@ -953,7 +1007,7 @@ struct Layer
 		auto *n = w.mExternalSources.GetOrAllocate(name);
 		return n - w.mExternalSources.table[0].mem;
 	}
-	SourceSection *SourceFromConfig(const SubStr &name, int &hand)
+	SourceSection *SourceFromConfig(const SubStr &name, unsigned char &hand)
 	{
 		SubStr n, s;
 		if(name.Split2(n,s,'.'))
@@ -1269,7 +1323,7 @@ static float GetExtAction(void *priv, int act, int hand, int ax)
 static float GetRPNAction(void *priv, int act, int hand, int ax)
 {
 	Layer::SessionState *w = (Layer::SessionState *)priv;
-	return Calculate(w->mRPNPointers[act]->data);
+	return Calculate(w, w->mRPNPointers[act]->data);
 }
 static bool GetSource( void *priv, ActionSource &s, const SubStr &src )
 {
