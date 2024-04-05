@@ -91,12 +91,12 @@ T CalcOp2(T val1, T val2, char op, char op2 )
 
 #define IsOperatorToken(c) CharIn(c,"+-/*!%<>=(),")
 template <typename Token>
-bool ParseTokens( void *priv, GrowArray<Token> &arr, const char *string)
+bool ParseTokens( void *priv, GrowArray<Token> &arr, const char *string, size_t len = -1)
 {
 	bool is_op = IsOperatorToken(string[0]);;
 	const char *tok_begin = string;
 	char c;
-	while((c = *string++))
+	while((c = *string++) && len--)
 	{
 		//printf("%c %d\n", c, is_op);
 		if(IsOperatorToken(c) && !(is_op && (c == '-')))

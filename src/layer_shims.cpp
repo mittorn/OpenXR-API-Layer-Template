@@ -388,7 +388,7 @@ struct Layer
 
 		HashArrayMap<SubStr, float[2], 0> mExternalSources;
 
-		HashMap<const char*, RPNInstance> mRPNs;
+		HashMap<SubStr, RPNInstance> mRPNs;
 		GrowArray<RPNInstance*> mRPNPointers;
 
 		~SessionState()
@@ -464,7 +464,7 @@ struct Layer
 		asInfo.priority = 0;
 		nextLayer_xrCreateActionSet(mInstance, &asInfo, &mhLayerActionSet);
 		XrPath defaultProfile;
-		const char *profile = config.interactionProfile.val;
+		const char *profile = config.interactionProfile;
 		if(!profile)
 			profile = "/interaction_profiles/khr/simple_controller";
 		nextLayer_xrStringToPath(mInstance, profile, &defaultProfile);
@@ -802,7 +802,7 @@ struct Layer
 				{
 						Action *a = FindAppSessionAction(w,ev.str1);
 						if(a)
-							AxisFromConfig(*a, ev.i1, ev.str2, ev.f1, w);
+							AxisFromConfig(*a, ev.i1, SubStrB(ev.str2), ev.f1, w);
 				}
 				break;
 				default:
@@ -949,10 +949,10 @@ struct Layer
 	{
 		if(suffix.Len())
 			return PathIndexFromSuffix(suffix);
-		else if(!c.subactionOverride.val)
+		else if(!(const char*)c.subactionOverride)
 			return 1;
 		XrPath p;
-		nextLayer_xrStringToPath(mInstance, c.subactionOverride.val, &p);
+		nextLayer_xrStringToPath(mInstance, c.subactionOverride, &p);
 		return FindPath(p);
 	}
 
@@ -997,14 +997,13 @@ struct Layer
 		return ret;
 	}
 
-	void AxisFromConfig(Action &a, int hand, const char *mapping, int axis, SessionState &w)
+	void AxisFromConfig(Action &a, int hand, const SubStr &mapping, int axis, SessionState &w)
 	{
-		SubStr m = SubStr(mapping, mapping + strlen(mapping));
-		SourceSection *c = SourceFromConfig(m, a.baseState[hand].map.src[axis].handIndex);
+		SourceSection *c = SourceFromConfig(mapping, a.baseState[hand].map.src[axis].handIndex);
 		if(!c)
 		{
 			GrowArray<RPNToken> tokens;
-			if(!ParseTokens(&w, tokens, mapping))
+			if(!ParseTokens(&w, tokens, mapping.begin, mapping.Len()))
 				return;
 			RPNInstance &inst = w.mRPNs[mapping];
 			if(!ShuntingYard(tokens, inst.data))
@@ -1017,7 +1016,7 @@ struct Layer
 			return;
 		}
 
-		if(!FillSource( a.baseState[hand].map.src[axis], w, c, m))
+		if(!FillSource( a.baseState[hand].map.src[axis], w, c, mapping))
 			Log( "Invalid action type: axis%d  %s %s\n", axis, mapping, c->h.name );
 		else
 			a.baseState[hand].hasAxisMapping = true;
@@ -1037,9 +1036,9 @@ struct Layer
 			a.baseState[hand].map.handIndex = HandFromConfig(*s->map.ptr, suf);
 		}
 
-		if(s->axis1.val)
+		if(s->axis1)
 			AxisFromConfig(a, hand, s->axis1.val, 0, w);
-		if(s->axis2.val)
+		if(s->axis2)
 			AxisFromConfig(a, hand, s->axis2.val, 1, w);
 	}
 
