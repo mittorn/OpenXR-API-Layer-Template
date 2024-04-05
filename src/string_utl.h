@@ -23,7 +23,7 @@ struct SubStr
 {
 	const char *begin, *end;
 	template<typename C, size_t len>
-	SubStr(C (&buf)[len]) :begin(buf), end(&buf[len - 1])
+	constexpr SubStr(C (&buf)[len]) :begin(buf), end(&buf[len - 1])
 	{
 		if constexpr(!ConstWarn<C>::r)
 		{
@@ -31,7 +31,7 @@ struct SubStr
 			ConstWarn<C>::warn();
 		}
 	}
-	SubStr(const char *b, const char *e) : begin(b), end(e){}
+	constexpr SubStr(const char *b, const char *e) : begin(b), end(e){}
 	SubStr(const char *b, size_t len) : begin(b), end(b + len){}
 	SubStr(){}
 	size_t Len() const
