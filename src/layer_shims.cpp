@@ -382,11 +382,11 @@ struct Layer
 		GrowArray<ActionVec2> mLayerActionsVec2;
 
 		// need to dynamicly inject new sources
-		HashArrayMap<const char*, int> mBoolIndexes;
-		HashArrayMap<const char*, int> mFloatIndexes;
-		HashArrayMap<const char*, int> mVec2Indexes;
+		HashArrayMap<SubStr, int> mBoolIndexes;
+		HashArrayMap<SubStr, int> mFloatIndexes;
+		HashArrayMap<SubStr, int> mVec2Indexes;
 
-		HashArrayMap<const char*, float[2], 0> mExternalSources;
+		HashArrayMap<SubStr, float[2], 0> mExternalSources;
 
 		HashMap<const char*, RPNInstance> mRPNs;
 		GrowArray<RPNInstance*> mRPNPointers;
@@ -418,7 +418,7 @@ struct Layer
 	HashMap<XrActionSet, ActionSet> gActionSetInfos;
 	ActionSet mLayerActionSet;
 	XrActionSet mhLayerActionSet;
-	HashArrayMap<const char *, int> mLayerActionIndexes;
+	HashArrayMap<SubStr, int> mLayerActionIndexes;
 	HashMap<XrPath, GrowArray<XrActionSuggestedBinding>> mLayerSuggestedBindings;
 	bool mfLayerActionSetSuggested = false;
 
@@ -493,13 +493,13 @@ struct Layer
 						info.subactionPaths = mUserPaths;
 					}
 					SBPrint(info.localizedActionName, "Layer: %s", node->v.h.name);
-					strncpy(info.actionName, node->v.h.name, sizeof(info.actionName) - 1);
+					node->v.h.name.CopyTo(info.actionName);
 
-					//strncpy(info.actionName, node->v.h.name + sizeof("[source"), strlen(node->v.h.name) - sizeof("[source]"));
 					nextLayer_xrCreateAction(mhLayerActionSet, &info, &act.action);
 
 					const char *str = node->v.bindings;
 					mLayerActionIndexes[node->v.h.name] = mLayerActionSet.mActions.count - 1;
+
 					if(!str)
 					{
 						Log("Missing bindings for source %s\n", node->v.h.name);
@@ -747,12 +747,12 @@ struct Layer
 						InitProfile(w, config.startupProfile.ptr);
 					break;
 				case EVENT_POLL_SET_PROFILE:
-						InitProfile(w, &config.bindings.mSections[ev.str1]);
+						InitProfile(w, &config.bindings.mSections[SubStr(ev.str1, strlen(ev.str1))]);
 					break;
 				case EVENT_POLL_MAP_ACTION:
 					{
 						Action *a = FindAppSessionAction(w,ev.str1);
-						ActionMapSection *s = config.actionMaps.mSections.GetPtr(ev.str2);
+						ActionMapSection *s = config.actionMaps.mSections.GetPtr(SubStr(ev.str2, strlen(ev.str2)));
 						if(a && s)
 							ApplyActionMap(w, *a, s, ev.i1 );
 					}
@@ -773,7 +773,7 @@ struct Layer
 					break;
 				case EVENT_POLL_SET_EXTERNAL_SOURCE:
 						// todo: add float? Use union?
-						w.mExternalSources[ev.str1][ev.i1] = ev.f1;
+						w.mExternalSources[SubStr(ev.str1,strlen(ev.str1))][ev.i1] = ev.f1;
 					break;
 				case EVENT_POLL_TRIGGER_INTERACTION_PROFILE_CHANGED: // todo: move to xrPollEvents? Separate queue?
 					mTriggerInteractionProfileChanged = true;
@@ -791,7 +791,7 @@ struct Layer
 							*suffix++ = 0, suf = SubStr(suffix, strlen(suffix));
 						if(a)
 						{
-							SourceSection *s = config.sources.mSections.GetPtr(ev.str2);
+							SourceSection *s = config.sources.mSections.GetPtr(SubStr(ev.str2, strlen(ev.str2)));
 							if((int)s->actionType == (int)a->info.actionType)
 								a->baseState[ev.i1].map.actionIndex = AddSourceToSession(w, a->info.actionType, s->h.name );
 							a->baseState[ev.i1].map.handIndex = HandFromConfig(*s, suf);
@@ -923,7 +923,7 @@ struct Layer
 	}
 
 	template<typename AT>
-	int AddSourceToSessionT( HashArrayMap<const char*, int> &indexMap, GrowArray<AT>& array, const char *name )
+	int AddSourceToSessionT( HashArrayMap<SubStr, int> &indexMap, GrowArray<AT>& array, const SubStr &name )
 	{
 		int &idx = indexMap[name];
 		if(!idx)
@@ -934,7 +934,7 @@ struct Layer
 		return idx - 1;
 	}
 
-	int AddSourceToSession( SessionState &w, XrActionType t, const char *name )
+	int AddSourceToSession( SessionState &w, XrActionType t, const SubStr &name )
 	{
 		if(t == XR_ACTION_TYPE_BOOLEAN_INPUT)
 			return AddSourceToSessionT( w.mBoolIndexes, w.mLayerActionsBoolean, name );
@@ -956,14 +956,13 @@ struct Layer
 		return FindPath(p);
 	}
 
-	int AddExternalSource(SessionState &w, const char *name)
+	int AddExternalSource(SessionState &w, const SubStr &name)
 	{
 		auto *n = w.mExternalSources.GetOrAllocate(name);
 		return n - w.mExternalSources.table[0].mem;
 	}
 	SourceSection *SourceFromConfig(const SubStr &name, int &hand)
 	{
-		//SubStr ss = SubStr(name, strlen(name));
 		SubStr n, s;
 		if(name.Split2(n,s,'.'))
 		{
@@ -977,9 +976,7 @@ struct Layer
 			n = name;
 		}
 
-		char sectionName[256];
-		n.CopyTo(sectionName);
-		SourceSection *c = config.sources.mSections.GetPtr(sectionName);
+		SourceSection *c = config.sources.mSections.GetPtr(n);
 		if(c && hand == USER_INVALID)
 			hand = HandFromConfig(*c, "");
 		return c;
