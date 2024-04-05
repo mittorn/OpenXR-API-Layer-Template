@@ -29,6 +29,8 @@ inline bool KeyCompare(const SubStr &a, const SubStr &b)
 inline const SubStr  KeyAlloc(const SubStr &a)
 {
 	char *mem = (char*)malloc(a.Len() + 1);
+	if(!mem)
+		return "";
 	memcpy(mem, a.begin, a.Len());
 	mem[a.Len()] = 0;
 	return SubStr(mem, mem + a.Len());
