@@ -286,7 +286,7 @@ struct HashArrayMap {
 		Node(const Key &key, const Value &value) :
 			k(key), v(value){}
 		Node(const Key &key) :
-			k(key), v(){}
+			k(key), v(){memset(&v, 0, sizeof(v));}
 	};
 
 	constexpr static size_t TblSize = 1U << TblPower;
@@ -331,7 +331,13 @@ struct HashArrayMap {
 
 	Value &operator [] (const Key &key)
 	{
-		return GetOrAllocate(key)->v;
+		Node *n = GetOrAllocate(key);
+		if(!n)
+		{
+			static Value error;
+			return error;
+		}
+		return n->v;
 	}
 
 #define HASHFIND(key) \
@@ -344,8 +350,8 @@ struct HashArrayMap {
 	Node *GetOrAllocate(const Key &key)
 	{
 		HASHFIND(key);
-		if(i == entry.count )
-			entry.Add(Node(KeyAlloc(key)));
+		if(i == entry.count && !entry.Add( Node( KeyAlloc( key ))))
+			return nullptr;
 
 		return &entry[i];
 	}

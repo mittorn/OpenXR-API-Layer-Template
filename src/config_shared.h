@@ -113,8 +113,12 @@ struct SectionReference_
 			else
 			{
 				char *mem = (char*)malloc(s2.Len() + 1);
-				memcpy(mem, s2.begin, s2.Len() + 1);
-				suffix = {mem, mem + s2.Len()};
+				if(mem)
+				{
+					memcpy(mem, s2.begin, s2.Len() + 1);
+					suffix = {mem, mem + s2.Len()};
+				}
+				else Log("OOM\n");
 			}
 			IniParserLine sn = {sectionName, &sectionName[SBPrint(sectionName, "[%s.%s]", S::prefix, s1) - 1]};
 			auto *n = l.parser.mDict.GetNode(sn);
@@ -184,8 +188,12 @@ struct StringOption_
 		if(str.begin)
 		{
 			char *mem = (char*)malloc(str.end - str.begin + 1);
-			memcpy(mem, str.begin, str.end - str.begin + 1);
-			val = {mem, &mem[str.end - str.begin]};
+			if(mem)
+			{
+				memcpy(mem, str.begin, str.end - str.begin + 1);
+				val = {mem, &mem[str.end - str.begin]};
+			}
+			else Log("OOM\n");
 		}
 		str = {nullptr, nullptr};
 	}
