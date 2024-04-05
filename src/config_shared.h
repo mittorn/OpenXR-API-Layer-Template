@@ -8,7 +8,7 @@
 struct ConfigLoader
 {
 	HashArrayMap<IniParserLine, IniParserLine> *CurrentSection;
-	const char *CurrentSectionName = "[root]";
+	SubStr CurrentSectionName = "[root]";
 	void *CurrentSectionPointer = nullptr;
 	HashMap<const char*, void*> parsedSecions;
 	HashMap<const char*, GrowArray<void**>> forwardSections;
@@ -22,7 +22,7 @@ struct ConfigLoader
 
 struct SectionHeader_
 {
-	const char *name = nullptr;
+	SubStr name = {nullptr, nullptr};
 	SectionHeader_(){}
 	SectionHeader_(const SectionHeader_ &other) = delete;
 	SectionHeader_& operator=(const SectionHeader_ &) = delete;
@@ -37,7 +37,7 @@ template <typename S>
 struct Sections
 {
 
-	HashMap<const char*, S> mSections;
+	HashMap<SubStr, S> mSections;
 	Sections(){}
 	Sections(const Sections &other) = delete;
 	Sections& operator=(const Sections &) = delete;
@@ -53,9 +53,7 @@ struct Sections
 				SubStr sp, sn;
 				if( s.Split2(sp, sn, '.') && sp.Equals(S::prefix))
 				{
-					char suffix[32];
-					sn.CopyTo(suffix);
-					auto *sectionNode = mSections.GetOrAllocate(suffix);
+					auto *sectionNode = mSections.GetOrAllocate(sn);
 					S& section = sectionNode->v;
 					l.CurrentSection = &node->v;
 					l.CurrentSectionName = sectionNode->k;
