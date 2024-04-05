@@ -271,6 +271,34 @@ struct HashMap {
 		delete entry;
 		return true;
 	}
+
+	struct Iter
+	{
+		Node *n;
+		int i;
+		Node *operator ->()
+		{
+			return n;
+		}
+	};
+
+	Iter Begin()
+	{
+		for(int i = 0; i < TblSize; i++)
+			if(table[i])
+				return {table[i], i};
+		return {nullptr,-1};
+	}
+
+	Iter Next(const Iter &i)
+	{
+		if(i.n->n)
+			return {i.n->n, i.i};
+		int idx = i.i;
+		while(++idx < TblSize)
+			if(table[idx]) return {table[idx], idx};
+		return {nullptr, -1};
+	}
 #undef HASHFIND
 };
 
@@ -367,6 +395,50 @@ struct HashArrayMap {
 		}
 		return false;
 	}
+
+
+
+	unsigned int GetIndex(const Key &key) const
+	{
+		HASHFIND(key);
+		if(i == entry.count)
+			return -1;
+		return (unsigned)i << TblPower | (&entry - table);
+	}
+
+	Node *GetByIndex(unsigned int idx) const
+	{
+		return &table[idx & (TblSize - 1)][idx >> TblPower];
+	}
+
+	struct Iter
+	{
+		Node *n;
+		unsigned int idx;
+		Node *operator ->()
+		{
+			return n;
+		}
+	};
+
+	Iter Begin() const
+	{
+		for(unsigned int i = 0; i < TblSize; i++)
+			if(table[i].count)
+				return {&table[i][0], i};
+		return {nullptr,(unsigned)-1};
+	}
+
+	Iter Next(const Iter &i)
+	{
+		if(table[i.idx & (TblSize - 1)].count > (i.idx >> TblPower) + 1 )
+			return {i.n + 1, (unsigned int)(i.idx + TblSize)};
+		unsigned int idx = i.idx & (TblSize - 1);
+		while(++idx < TblSize)
+			if(table[idx].count)
+				return {&table[idx][0], idx};
+		return {nullptr, (unsigned int)-1};
+	}
 #undef HASHFIND
 };
 
@@ -402,5 +474,8 @@ struct CycleQueue
 		return true;
 	}
 };
+
+#define HASHMAP_FOREACH(m, node) for(auto node = m.Begin(); node.n; node = m.Next(node))
+
 
 #endif // CONTAINER_UTL_H

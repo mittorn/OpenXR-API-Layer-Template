@@ -51,34 +51,31 @@ struct Sections
 	{
 		HashArrayMap<IniParserLine, IniParserLine> *PreviousSection = l.CurrentSection;
 		void *PrevioisSectionPointer = l.CurrentSectionPointer;
-		for(int i = 0; i < l.parser.mDict.TblSize; i++)
+		HASHMAP_FOREACH(l.parser.mDict, node)
 		{
-			for(auto *node = l.parser.mDict.table[i]; node; node = node->n)
+			SubStr s = {node->k.begin + 1, node->k.end - 1};
+			SubStr sp, sn;
+			if( s.Split2(sp, sn, '.') && sp.Equals(S::prefix))
 			{
-				SubStr s = {node->k.begin + 1, node->k.end - 1};
-				SubStr sp, sn;
-				if( s.Split2(sp, sn, '.') && sp.Equals(S::prefix))
+				auto *sectionNode = mSections.GetOrAllocate(sn);
+				S& section = sectionNode->v;
+				l.CurrentSection = &node->v;
+				l.CurrentSectionName = sectionNode->k;
+				l.parsedSecions[node->k] = (void*)&section;
+				l.CurrentSectionPointer = &section;
+				ConstructorVisitor<S, ConfigLoader>().Fill(&section,l);
+				auto *fwd = l.forwardSections.GetPtr(node->k);
+				if(fwd)
 				{
-					auto *sectionNode = mSections.GetOrAllocate(sn);
-					S& section = sectionNode->v;
-					l.CurrentSection = &node->v;
-					l.CurrentSectionName = sectionNode->k;
-					l.parsedSecions[node->k] = (void*)&section;
-					l.CurrentSectionPointer = &section;
-					ConstructorVisitor<S, ConfigLoader>().Fill(&section,l);
-					auto *fwd = l.forwardSections.GetPtr(node->k);
-					if(fwd)
+					for(int j = 0; j < fwd->count; j++)
 					{
-						for(int j = 0; j < fwd->count; j++)
-						{
-							void **sec = (*fwd)[j];
-							*sec = (void*)&section;
-						}
+						void **sec = (*fwd)[j];
+						*sec = (void*)&section;
 					}
-
-					l.CurrentSection = PreviousSection;
-					l.CurrentSectionPointer = PrevioisSectionPointer;
 				}
+
+				l.CurrentSection = PreviousSection;
+				l.CurrentSectionPointer = PrevioisSectionPointer;
 			}
 		}
 	}
@@ -329,39 +326,36 @@ struct BindingProfileSection
 		DynamicActionMaps& operator=(const DynamicActionMaps &) = delete;
 		DynamicActionMaps(ConfigLoader &l)
 		{
-			for(int i = 0; i < l.CurrentSection->TblSize; i++)
+			HASHMAP_FOREACH((*l.CurrentSection), node)
 			{
-				for(int j = 0; j < l.CurrentSection->table[i].count; j++)
+				char sectionName[256];
+				if(!node->v.begin)
+					continue;
+				IniParserLine sn = {sectionName, &sectionName[SBPrint(sectionName, "[%s.%s]", ActionMapSection::prefix, SubStrFromIni( node->v )) - 1]};
+				auto *n = l.parser.mDict.GetNode(sn);
+				if(!n)
 				{
-					char sectionName[256];
-					if(!l.CurrentSection->table[i][j].v.begin)
-						continue;
-					IniParserLine sn = {sectionName, &sectionName[SBPrint(sectionName, "[%s.%s]", ActionMapSection::prefix, SubStrFromIni( l.CurrentSection->table[i][j].v )) - 1]};
-					auto *n = l.parser.mDict.GetNode(sn);
-					if(!n)
-					{
-						Log("Section %s, actionmap %s: missing config section referenced: %s\n", ((SectionHeader_*)l.CurrentSectionPointer)->name, l.CurrentSection->table[i][j].k, sectionName);
-						continue;
-					}
-
-					ActionMapSection *map = (ActionMapSection *)l.parsedSecions[n->k];
-					if(!map)
-						continue;
-					SubStr kk = SubStrFromIni(l.CurrentSection->table[i][j].k);
-					SubStr nn, s;
-					if(kk.Split2(nn, s, '.'))
-					{
-						maps[PathIndexFromSuffix(s)][nn] = map;
-					}
-					else
-					{
-						maps[USER_HAND_LEFT][kk] = map;
-						maps[USER_HAND_RIGHT][kk] = map;
-						maps[USER_INVALID][kk] = map;
-					}
-
-					l.CurrentSection->table[i][j].v = {nullptr, nullptr};
+					Log("Section %s, actionmap %s: missing config section referenced: %s\n", ((SectionHeader_*)l.CurrentSectionPointer)->name, node->k, sectionName);
+					continue;
 				}
+
+				ActionMapSection *map = (ActionMapSection *)l.parsedSecions[n->k];
+				if(!map)
+					continue;
+				SubStr kk = SubStrFromIni(node->k);
+				SubStr nn, s;
+				if(kk.Split2(nn, s, '.'))
+				{
+					maps[PathIndexFromSuffix(s)][nn] = map;
+				}
+				else
+				{
+					maps[USER_HAND_LEFT][kk] = map;
+					maps[USER_HAND_RIGHT][kk] = map;
+					maps[USER_INVALID][kk] = map;
+				}
+
+				node->v = {nullptr, nullptr};
 			}
 		}
 	} actionMaps;
@@ -391,12 +385,11 @@ static void LoadConfig(Config *c)
 	ConfigLoader t = ConfigLoader(p);
 	t.CurrentSectionPointer = c;
 	ConstructorVisitor<Config, ConfigLoader>().Fill(c,t);
-	for(int i = 0; i < p.mDict.TblSize; i++)
-		for(auto *node = p.mDict.table[i]; node; node = node->n)
-			for(int j = 0; j < node->v.TblSize; j++)
-				for(int k = 0; k < node->v.table[j].count; k++ )
-					if(node->v.table[j][k].v.begin)
-						Log("Section %s: unused config key %s = %s\n", node->k, node->v.table[j][k].k.begin, node->v.table[j][k].v.begin);
+
+	HASHMAP_FOREACH(p.mDict, n1)
+		HASHMAP_FOREACH(n1->v, n)
+			if(n->v.begin)
+				Log("Section %s: unused config key %s = %s\n", n1->k, n->k.begin, n->v.begin);
 
 	Log("ServerPort %d\n", (int)c->serverPort);
 }
