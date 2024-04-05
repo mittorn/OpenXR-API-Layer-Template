@@ -63,21 +63,16 @@ struct Funcs
 };
 
 #define RPN_FUNC(name, ...) #name, ConstHashFunc(#name) & (FUNCMAP_SIZE - 1),  [] (__VA_ARGS__) -> float
+#define FUNC_GROUP(name, ...) constexpr struct funcgroup_##name : Funcs{ float (*pfn)(__VA_ARGS__);} name[]
 
-constexpr struct Funcs0 : Funcs
-{
-	float (*pfn)(void *priv);
-} funcs0[] =
+FUNC_GROUP(funcs0, void *p) =
 {
 	{RPN_FUNC(dummy0, void *p) {
 		return 0;
 	}}
 };
 
-constexpr struct Funcs1 : Funcs
-{
-	float (*pfn)(void *priv, float val1);
-} funcs1[] =
+FUNC_GROUP(funcs1, void *p, float val1) =
 {
 	{RPN_FUNC(sin,void *p, float val1) {
 		return sinf(val1);
@@ -90,20 +85,14 @@ constexpr struct Funcs1 : Funcs
 	}}
 };
 
-constexpr struct Funcs2 : Funcs
-{
-	float (*pfn)(void *priv, float val1, float val2);
-} funcs2[] =
+FUNC_GROUP(funcs2, void *p, float val1, float val2) =
 {
 	{RPN_FUNC(dummy2,void*,float val1, float) {
 		return sinf(val1);
 	}}
 };
 
-constexpr struct Funcs3 : Funcs
-{
-	float (*pfn)(void *priv, float val1, float val2, float val3);
-} funcs3[] =
+FUNC_GROUP(funcs3, void *p, float val1, float val2, float val3) =
 {
 	{RPN_FUNC(dummy3,void*,float val1, float, float) {
 		return sinf(val1);
