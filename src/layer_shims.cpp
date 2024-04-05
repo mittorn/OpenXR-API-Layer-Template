@@ -497,15 +497,14 @@ struct Layer
 
 					nextLayer_xrCreateAction(mhLayerActionSet, &info, &act.action);
 
-					const char *str = node->v.bindings;
+					SubStr s = node->v.bindings.val;
 					mLayerActionIndexes[node->v.h.name] = mLayerActionSet.mActions.count - 1;
 
-					if(!str)
+					if(!s.begin)
 					{
 						Log("Missing bindings for source %s\n", node->v.h.name);
 						continue;
 					}
-					SubStr s = {str, str + strlen(str)};
 					do
 					{
 						XrPath path;
@@ -785,13 +784,13 @@ struct Layer
 				case EVENT_POLL_MAP_DIRECT_SOURCE:
 					{
 						Action *a = FindAppSessionAction(w,ev.str1);
-						SubStr suf{""};
-						char *suffix = (char*)strchr(ev.str2, '.');
-						if(suffix)
-							*suffix++ = 0, suf = SubStr(suffix, strlen(suffix));
+						SubStr ss = SubStrB(ev.str2);
+						SubStr base, suf;
+						if(!ss.Split2(base, suf, '.'))
+							base = ss, suf = "";
 						if(a)
 						{
-							SourceSection *s = config.sources.mSections.GetPtr(SubStrB(ev.str2));
+							SourceSection *s = config.sources.mSections.GetPtr(base);
 							if((int)s->actionType == (int)a->info.actionType)
 								a->baseState[ev.i1].map.actionIndex = AddSourceToSession(w, a->info.actionType, s->h.name );
 							a->baseState[ev.i1].map.handIndex = HandFromConfig(*s, suf);
@@ -1031,9 +1030,8 @@ struct Layer
 			if((int)s->map.ptr->actionType == (int)a.info.actionType)
 				a.baseState[hand].map.actionIndex = AddSourceToSession(w, a.info.actionType, s->map.ptr->h.name );
 			if(a.baseState[hand].map.actionIndex < 0)
-				Log( "Invalid direct action map (types must be same): %s %s %s %d\n", s->h.name, s->map.suffix? s->map.suffix: "(auto)", s->map.ptr->h.name, hand );
-			SubStr suf = s->map.suffix? SubStr(s->map.suffix, strlen(s->map.suffix)): "";
-			a.baseState[hand].map.handIndex = HandFromConfig(*s->map.ptr, suf);
+				Log( "Invalid direct action map (types must be same): %s %s %s %d\n", s->h.name, s->map.suffix.begin? s->map.suffix.begin: "(auto)", s->map.ptr->h.name, hand );
+			a.baseState[hand].map.handIndex = HandFromConfig(*s->map.ptr, s->map.suffix);
 		}
 
 		if(s->axis1)

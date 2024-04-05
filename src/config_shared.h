@@ -90,15 +90,15 @@ struct SectionReference_
 {
 	constexpr static const char *name = NAME;
 	S *ptr = 0;
-	const char *suffix = nullptr;
+	SubStr suffix = {nullptr, nullptr};
 	SectionReference_(const SectionReference_ &other) = delete;
 	SectionReference_& operator=(const SectionReference_ &) = delete;
 	SectionReference_(){}
 	~SectionReference_()
 	{
-		if(suffix)
-			free((void*)suffix);
-		suffix = nullptr;
+		if(suffix.begin)
+			free((void*)suffix.begin);
+		suffix = {nullptr, nullptr};
 	}
 	SectionReference_(ConfigLoader &l)
 	{
@@ -111,7 +111,11 @@ struct SectionReference_
 			if(!s.Split2(s1, s2, '.'))
 				s1 = s;
 			else
-				suffix = strdup(s2.begin);
+			{
+				char *mem = (char*)malloc(s2.Len() + 1);
+				memcpy(mem, s2.begin, s2.Len() + 1);
+				suffix = {mem, mem + s2.Len()};
+			}
 			IniParserLine sn = {sectionName, &sectionName[SBPrint(sectionName, "[%s.%s]", S::prefix, s1) - 1]};
 			auto *n = l.parser.mDict.GetNode(sn);
 			if(!n)
