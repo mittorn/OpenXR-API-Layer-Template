@@ -85,7 +85,7 @@ struct Sections
 };
 
 
-template <typename S, const auto &NAME>
+template <typename S, const auto &NAME, size_t nlen>
 struct SectionReference_
 {
 	constexpr static const char *name = NAME;
@@ -102,7 +102,7 @@ struct SectionReference_
 	}
 	SectionReference_(ConfigLoader &l)
 	{
-		IniParserLine &str = (*l.CurrentSection)[name];
+		IniParserLine &str = (*l.CurrentSection)[IniParserLine{(char*)NAME, (char*)&NAME[nlen]}];
 		if(str.begin)
 		{
 			char sectionName[256];
@@ -131,11 +131,11 @@ struct SectionReference_
 	}
 };
 #define SectionReference(type,name) \
-constexpr static const char *opt_name_##name = #name; \
-	SectionReference_<type, opt_name_##name> name;
+constexpr static const char opt_name_##name[] = #name; \
+	SectionReference_<type, opt_name_##name, sizeof(opt_name_##name) - 1> name;
 
 
-template <typename T, const auto &NAME>
+template <typename T, const auto &NAME, size_t nlen>
 struct Option_
 {
 	constexpr static const char *name = NAME;
@@ -149,19 +149,19 @@ struct Option_
 	Option_(){}
 	Option_(const T &def):val(def){}
 	Option_(ConfigLoader &l){
-		IniParserLine &str = (*l.CurrentSection)[name];
+		IniParserLine &str = (*l.CurrentSection)[IniParserLine{(char*)NAME, (char*)&NAME[nlen]}];
 		if(str.begin)
 			val = (T)atof(str);
 		str ={nullptr, nullptr};
 	}
 };
 #define Option(type,name) \
-constexpr static const char *opt_name_##name = #name; \
-	Option_<type, opt_name_##name> name;
+constexpr static const char opt_name_##name[] = #name; \
+	Option_<type, opt_name_##name, sizeof(opt_name_##name) - 1> name;
 
 
 
-template <const auto &NAME>
+template <const auto &NAME, size_t nlen>
 struct StringOption_
 {
 	constexpr static const char *name = NAME;
@@ -180,7 +180,7 @@ struct StringOption_
 		val = {nullptr, nullptr};
 	}
 	StringOption_(ConfigLoader &l){
-		IniParserLine &str = (*l.CurrentSection)[name];
+		IniParserLine &str = (*l.CurrentSection)[IniParserLine{(char*)NAME, (char*)&NAME[nlen]}];
 		if(str.begin)
 		{
 			char *mem = (char*)malloc(str.end - str.begin + 1);
@@ -192,8 +192,8 @@ struct StringOption_
 };
 
 #define StringOption(name) \
-constexpr static const char *opt_name_##name = #name; \
-	StringOption_<opt_name_##name> name;
+constexpr static const char opt_name_##name[] = #name; \
+	StringOption_<opt_name_##name, sizeof(opt_name_##name) - 1> name;
 
 #define IsDelim(c) (!(c) || ((c) == ' '|| (c) == ','))
 static size_t GetEnum(const char *scheme, const char *val)
@@ -223,7 +223,7 @@ static size_t GetEnum(const char *scheme, const char *val)
 }
 
 
-template <typename T, const auto &NAME, const auto &SCHEME>
+template <typename T, const auto &NAME, size_t nlen, const auto &SCHEME>
 struct EnumOption_
 {
 	constexpr static const char *name = NAME;
@@ -236,7 +236,7 @@ struct EnumOption_
 	EnumOption_& operator=(const EnumOption_ &) = delete;
 	EnumOption_(){}
 	EnumOption_(ConfigLoader &l){
-		IniParserLine &str = (*l.CurrentSection)[name];
+		IniParserLine &str = (*l.CurrentSection)[IniParserLine{(char*)NAME, (char*)&NAME[nlen]}];
 		if(str.begin)
 		{
 			val = (T)GetEnum(SCHEME, str);
@@ -253,9 +253,9 @@ enum name ## _enum { \
 				  __VA_ARGS__, \
 				  name ## _count \
 }; \
-	constexpr static const char *name ## _name = #name; \
+	constexpr static const char name ## _name[] = #name; \
 	constexpr static const char *name ## _scheme = #__VA_ARGS__; \
-	EnumOption_<name ## _enum, name ## _name, name ## _scheme> name;
+	EnumOption_<name ## _enum, name ## _name , sizeof(name ## _name) - 1, name ## _scheme> name;
 
 struct SourceSection
 {
