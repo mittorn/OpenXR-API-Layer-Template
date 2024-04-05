@@ -53,43 +53,190 @@ struct ActionSource
 static bool GetSource( void *priv, ActionSource &s, const SubStr &src );
 static float *GetVar(void *priv, const SubStr &v );
 
-// todo: compile-time map?
-struct
+
+#define FUNCMAP_SIZE 4
+
+#define RPN_FUNC0(name) #name, sizeof(#name) - 1, ConstHashFunc(#name) & (FUNCMAP_SIZE - 1),  [] (void *priv) -> float
+#define RPN_FUNC1(name) #name, sizeof(#name) - 1, ConstHashFunc(#name) & (FUNCMAP_SIZE - 1),  [] (void *priv, float val1) -> float
+#define RPN_FUNC2(name) #name, sizeof(#name) - 1, ConstHashFunc(#name) & (FUNCMAP_SIZE - 1),  [] (void *priv, float val1, float val2) -> float
+#define RPN_FUNC3(name) #name, sizeof(#name) - 1, ConstHashFunc(#name) & (FUNCMAP_SIZE - 1),  [] (void *priv, float val1, float val2, float val3) -> float
+
+struct Funcs0
 {
 	const char *name;
-	unsigned int index;
-} gFuncMap[] =
-{
-	{"sin", (0U << 2) | 1},
-	{"cos", (1U << 2) | 1}
+	size_t nlen;
+	int hash;
+	float (*pfn)(void *priv);
 };
 
 
-float func_sin(void *priv, float f)
+struct Funcs1
 {
-	return sin(f);
+	const char *name;
+	size_t nlen;
+	int hash;
+	float (*pfn)(void *priv, float val1);
+};
+
+struct Funcs2
+{
+	const char *name;
+	size_t nlen;
+	int hash;
+	float (*pfn)(void *priv, float val1, float val2);
+};
+
+struct Funcs3
+{
+	const char *name;
+	size_t nlen;
+	int hash;
+	float (*pfn)(void *priv, float val1, float val2, float val3);
+};
+
+constexpr Funcs0 funcs0[] =
+{
+	{RPN_FUNC0(dummy0) {
+		return 0;
+	}}
+};
+
+
+constexpr Funcs1 funcs1[] =
+{
+	{RPN_FUNC1(sin) {
+		return sinf(val1);
+	}},
+	{RPN_FUNC1(cos) {
+		return cosf(val1);
+	}},
+	{RPN_FUNC1(abs) {
+		return fabs(val1);
+	}}
+};
+
+
+constexpr Funcs2 funcs2[] =
+{
+	{RPN_FUNC2(dummy2) {
+		return sinf(val1);
+	}}
+};
+
+
+constexpr Funcs3 funcs3[] =
+{
+	{RPN_FUNC3(dummy3) {
+		return sinf(val1);
+	}}
+};
+
+
+struct FuncKV
+{
+	const char *key;
+	size_t klen;
+	unsigned int index;
+};
+
+constexpr FuncKV dummy = {nullptr, 0};
+
+constexpr size_t FuncCount(size_t h)
+{
+	size_t j = 0;
+	for(unsigned int i = 0; i < sizeof(funcs0) / sizeof(Funcs0); i++)
+		if(funcs0[i].hash == h)
+			j++;
+	for(unsigned int i = 0; i < sizeof(funcs1) / sizeof(Funcs1); i++)
+		if(funcs1[i].hash == h)
+			j++;
+	for(unsigned int i = 0; i < sizeof(funcs2) / sizeof(Funcs2); i++)
+		if(funcs2[i].hash == h)
+			j++;
+	for(unsigned int i = 0; i < sizeof(funcs3) / sizeof(Funcs3); i++)
+		if(funcs3[i].hash == h)
+			j++;
+	return j;
 }
 
-float func_cos(void *priv, float f)
-{
-	return cos(f);
-}
 
-float (*funcs0[1])(void *priv) = {};
-float (*funcs1[])(void *priv, float val1) = {func_sin, func_cos};
-float (*funcs2[1])(void *priv, float val1, float val2) = {};
-float (*funcs3[1])(void *priv, float val1, float val2, float val3) = {};
+template<size_t i>
+struct ConstFuncMap : ConstFuncMap<i + 1>
+{
+	FuncKV bucket[FuncCount(i)];
+	constexpr ConstFuncMap() : bucket(), ConstFuncMap<i + 1>()
+	{
+		int j = 0;
+
+		for(unsigned int ii = 0; ii < sizeof(funcs0) / sizeof(Funcs0); ii++)
+		{
+			if(funcs0[ii].hash == i)
+			{
+				bucket[j].key = funcs0[ii].name;
+				bucket[j].klen = funcs0[ii].nlen;
+				bucket[j++].index = 0 | ii << 2;
+			}
+		}
+		for(unsigned int ii = 0; ii < sizeof(funcs1) / sizeof(Funcs1); ii++)
+		{
+			if(funcs1[ii].hash == i)
+			{
+				bucket[j].key = funcs1[ii].name;
+				bucket[j].klen = funcs1[ii].nlen;
+				bucket[j++].index = 1 | ii << 2;
+			}
+		}
+		for(unsigned int ii = 0; ii < sizeof(funcs2) / sizeof(Funcs2); ii++)
+		{
+			if(funcs2[ii].hash == i)
+			{
+				bucket[j].key = funcs2[ii].name;
+				bucket[j].klen = funcs2[ii].nlen;
+				bucket[j++].index = 2 | ii << 2;
+			}
+		}
+		for(unsigned int ii = 0; ii < sizeof(funcs3) / sizeof(Funcs3); ii++)
+		{
+			if(funcs3[ii].hash == i)
+			{
+				bucket[j].key = funcs3[ii].name;
+				bucket[j].klen = funcs3[ii].nlen;
+				bucket[j++].index = 3 | ii << 2;
+			}
+		}
+	}
+
+	const FuncKV &Find(const SubStr &s) const
+	{
+		size_t hash = HashFunc<FUNCMAP_SIZE>(s);
+		if(hash  == i)
+		{
+			for(int j = 0; j < sizeof(bucket) / sizeof(bucket[0]); j++)
+			{
+				SubStr s1 = {bucket[j].key, bucket[j].key + bucket[j].klen};
+				if(s.Equals(s1))
+					return bucket[j];
+			}
+			return dummy;
+		}
+		if constexpr(i < FUNCMAP_SIZE - 1)
+		{
+			return ConstFuncMap<i + 1>::Find(s);
+		}
+		return dummy;
+	}
+};
+template<>struct ConstFuncMap<FUNCMAP_SIZE>{};
+
+constexpr auto gConstFuncMap = ConstFuncMap<0>();
+
 
 unsigned int GetFunc(const SubStr &name)
 {
-	int i = 0;
-	char name1[32];
-	name.CopyTo(name1);
-	while(i < sizeof(gFuncMap)/sizeof(gFuncMap[0]) )
+	const FuncKV &a = gConstFuncMap.Find(name);
+	if(a.key)
 	{
-		if(!strcmp(gFuncMap[i].name, name1))
-			return gFuncMap[i].index;
-		i++;
+		return a.index;
 	}
 	return 0xFFFFFFFF;
 }
@@ -221,20 +368,20 @@ struct RPNToken
 			unsigned int funcidx = d.funcindex >> 2;
 			if(ac == 0)
 			{
-				StackPush(funcs0[funcidx](priv));
+				StackPush(funcs0[funcidx].pfn(priv));
 				return true;
 			}
 			if(ac == 1)
 			{
 				StackPop(val1);
-				StackPush(funcs1[funcidx](priv, val1));
+				StackPush(funcs1[funcidx].pfn(priv, val1));
 				return true;
 			}
 			if(ac == 2)
 			{
 				StackPop(val2);
 				StackPop(val1);
-				StackPush(funcs2[funcidx](priv, val1, val2));
+				StackPush(funcs2[funcidx].pfn(priv, val1, val2));
 				return true;
 			}
 			if(ac == 3)
@@ -242,7 +389,7 @@ struct RPNToken
 				StackPop(val3);
 				StackPop(val2);
 				StackPop(val1);
-				StackPush(funcs3[funcidx](priv, val1, val2, val3));
+				StackPush(funcs3[funcidx].pfn(priv, val1, val2, val3));
 				return true;
 			}
 		}
