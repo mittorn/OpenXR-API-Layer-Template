@@ -99,6 +99,8 @@ struct IniParser
 		}
 		next = pstr - mpszData;
 		pstr = _RFind(pstr, mpszData + start, " \t\n\r", true);
+		if(pstr > end)
+			pstr = end;
 		l.end = pstr;
 		*l.end = 0;
 		return next;
