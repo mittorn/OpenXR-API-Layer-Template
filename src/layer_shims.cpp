@@ -469,65 +469,62 @@ struct Layer
 			profile = "/interaction_profiles/khr/simple_controller";
 		nextLayer_xrStringToPath(mInstance, profile, &defaultProfile);
 		mfLayerActionSetSuggested = false;
-		for(int i = 0; i < config.sources.mSections.TblSize; i++)
+		HASHMAP_FOREACH(config.sources.mSections, node)
 		{
-			for(auto *node = config.sources.mSections.table[i]; node; node = node->n)
+			if(node->v.actionType < SourceSection::action_external)
 			{
-				if(node->v.actionType < SourceSection::action_external)
+				mLayerActionSet.mActions.Add({});
+				Action &act = mLayerActionSet.mActions[mLayerActionSet.mActions.count - 1];
+				XrActionCreateInfo &info = act.info;
+				info.type = XR_TYPE_ACTION_CREATE_INFO;
+				info.actionType = (XrActionType)(int)node->v.actionType;
+				XrPath sub;
+				if(node->v.subactionOverride)
 				{
-					mLayerActionSet.mActions.Add({});
-					Action &act = mLayerActionSet.mActions[mLayerActionSet.mActions.count - 1];
-					XrActionCreateInfo &info = act.info;
-					info.type = XR_TYPE_ACTION_CREATE_INFO;
-					info.actionType = (XrActionType)(int)node->v.actionType;
-					XrPath sub;
-					if(node->v.subactionOverride)
-					{
-						info.countSubactionPaths = 1;
-						nextLayer_xrStringToPath(mInstance, node->v.subactionOverride, &sub);
-						info.subactionPaths = &sub;
-					}
-					else
-					{
-						info.countSubactionPaths = USER_HEAD;
-						info.subactionPaths = mUserPaths;
-					}
-					SBPrint(info.localizedActionName, "Layer: %s", node->v.h.name);
-					node->v.h.name.CopyTo(info.actionName);
-
-					nextLayer_xrCreateAction(mhLayerActionSet, &info, &act.action);
-
-					SubStr s = node->v.bindings.val;
-					mLayerActionIndexes[node->v.h.name] = mLayerActionSet.mActions.count - 1;
-
-					if(!s.begin)
-					{
-						Log("Missing bindings for source %s\n", node->v.h.name);
-						continue;
-					}
-					do
-					{
-						XrPath path;
-						XrPath profile = defaultProfile;
-						SubStr n, s1;
-
-						if(s.Split2(n, s1, ':'))
-						{
-							char pr[n.Len() + 1];
-							n.CopyTo(pr,n.Len() + 1);
-							nextLayer_xrStringToPath(mInstance, pr, &profile);
-							s = s1;
-						}
-						if(!s.Split2(n, s1, ','))
-							n = s, s = "";
-						else
-							s = s1;
-						char bnd[n.Len() + 1];
-						n.CopyTo(bnd, n.Len() + 1);
-						nextLayer_xrStringToPath(mInstance, bnd, &path);
-						mLayerSuggestedBindings[profile].Add({act.action,path});
-					} while(s.Len());
+					info.countSubactionPaths = 1;
+					nextLayer_xrStringToPath(mInstance, node->v.subactionOverride, &sub);
+					info.subactionPaths = &sub;
 				}
+				else
+				{
+					info.countSubactionPaths = USER_HEAD;
+					info.subactionPaths = mUserPaths;
+				}
+				SBPrint(info.localizedActionName, "Layer: %s", node->v.h.name);
+				node->v.h.name.CopyTo(info.actionName);
+
+				nextLayer_xrCreateAction(mhLayerActionSet, &info, &act.action);
+
+				SubStr s = node->v.bindings.val;
+				mLayerActionIndexes[node->v.h.name] = mLayerActionSet.mActions.count - 1;
+
+				if(!s.begin)
+				{
+					Log("Missing bindings for source %s\n", node->v.h.name);
+					continue;
+				}
+				do
+				{
+					XrPath path;
+					XrPath profile = defaultProfile;
+					SubStr n, s1;
+
+					if(s.Split2(n, s1, ':'))
+					{
+						char pr[n.Len() + 1];
+						n.CopyTo(pr,n.Len() + 1);
+						nextLayer_xrStringToPath(mInstance, pr, &profile);
+						s = s1;
+					}
+					if(!s.Split2(n, s1, ','))
+						n = s, s = "";
+					else
+						s = s1;
+					char bnd[n.Len() + 1];
+					n.CopyTo(bnd, n.Len() + 1);
+					nextLayer_xrStringToPath(mInstance, bnd, &path);
+					mLayerSuggestedBindings[profile].Add({act.action,path});
+				} while(s.Len());
 			}
 		}
 	}
@@ -710,20 +707,16 @@ struct Layer
 	}
 	Action *FindAppSessionAction(SessionState &w, const char *name)
 	{
-		for(int i = 0; i < w.mActionsBoolean.TblSize; i++)
-			for(int j = 0; j < w.mActionsBoolean.table[i].count;j++)
-				if(!strcmp(w.mActionsBoolean.table[i][j].v.info.actionName, name))
-					return &w.mActionsBoolean.table[i][j].v;
+		HASHMAP_FOREACH(w.mActionsBoolean, n)
+			if(!strcmp(n->v.info.actionName, name))
+				return &n->v;
+		HASHMAP_FOREACH(w.mActionsFloat, n)
+			if(!strcmp(n->v.info.actionName, name))
+				return &n->v;
+		HASHMAP_FOREACH(w.mActionsVec2, n)
+			if(!strcmp(n->v.info.actionName, name))
+				return &n->v;
 
-		for(int i = 0; i < w.mActionsFloat.TblSize; i++)
-			for(int j = 0; j < w.mActionsFloat.table[i].count;j++)
-				if(!strcmp(w.mActionsFloat.table[i][j].v.info.actionName, name))
-					return &w.mActionsFloat.table[i][j].v;
-
-		for(int i = 0; i < w.mActionsVec2.TblSize; i++)
-			for(int j = 0; j < w.mActionsVec2.table[i].count;j++)
-				if(!strcmp(w.mActionsVec2.table[i][j].v.info.actionName, name))
-					return &w.mActionsVec2.table[i][j].v;
 		return nullptr;
 	}
 
