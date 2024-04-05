@@ -747,12 +747,12 @@ struct Layer
 						InitProfile(w, config.startupProfile.ptr);
 					break;
 				case EVENT_POLL_SET_PROFILE:
-						InitProfile(w, &config.bindings.mSections[SubStr(ev.str1, strlen(ev.str1))]);
+						InitProfile(w, &config.bindings.mSections[SubStrB(ev.str1)]);
 					break;
 				case EVENT_POLL_MAP_ACTION:
 					{
 						Action *a = FindAppSessionAction(w,ev.str1);
-						ActionMapSection *s = config.actionMaps.mSections.GetPtr(SubStr(ev.str2, strlen(ev.str2)));
+						ActionMapSection *s = config.actionMaps.mSections.GetPtr(SubStrB(ev.str2));
 						if(a && s)
 							ApplyActionMap(w, *a, s, ev.i1 );
 					}
@@ -764,7 +764,7 @@ struct Layer
 						{
 							for(int i = 0; i < USER_PATH_COUNT; i++)
 							{
-								ActionMapSection *s = config.startupProfile.ptr->actionMaps.maps[i][a->info.actionName];
+								ActionMapSection *s = config.startupProfile.ptr->actionMaps.maps[i][SubStrB(a->info.actionName)];
 								if(s)
 									ApplyActionMap(w, *a, s, i);
 							}
@@ -773,7 +773,7 @@ struct Layer
 					break;
 				case EVENT_POLL_SET_EXTERNAL_SOURCE:
 						// todo: add float? Use union?
-						w.mExternalSources[SubStr(ev.str1,strlen(ev.str1))][ev.i1] = ev.f1;
+						w.mExternalSources[SubStrB(ev.str1)][ev.i1] = ev.f1;
 					break;
 				case EVENT_POLL_TRIGGER_INTERACTION_PROFILE_CHANGED: // todo: move to xrPollEvents? Separate queue?
 					mTriggerInteractionProfileChanged = true;
@@ -791,7 +791,7 @@ struct Layer
 							*suffix++ = 0, suf = SubStr(suffix, strlen(suffix));
 						if(a)
 						{
-							SourceSection *s = config.sources.mSections.GetPtr(SubStr(ev.str2, strlen(ev.str2)));
+							SourceSection *s = config.sources.mSections.GetPtr(SubStrB(ev.str2));
 							if((int)s->actionType == (int)a->info.actionType)
 								a->baseState[ev.i1].map.actionIndex = AddSourceToSession(w, a->info.actionType, s->h.name );
 							a->baseState[ev.i1].map.handIndex = HandFromConfig(*s, suf);
@@ -1062,7 +1062,7 @@ struct Layer
 				Action &a = set.mActions[j];
 				for(int i = 0; i < USER_PATH_COUNT; i++)
 				{
-					ActionMapSection *s = p->actionMaps.maps[i][a.info.actionName];
+					ActionMapSection *s = p->actionMaps.maps[i][SubStrB(a.info.actionName)];
 					if(s)
 						ApplyActionMap(w, a, s, i);
 				}
