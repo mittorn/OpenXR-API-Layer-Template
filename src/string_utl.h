@@ -106,4 +106,15 @@ struct SubStr
 	}
 };
 
+template<size_t len>
+SubStr SubStrB(const char (&buf)[len])
+{
+	return {buf, &buf[strnlen(buf,len-1)]};
+}
+
+SubStr SubStrL(const char *str)
+{
+	return {str, str + strlen(str)};
+}
+
 #endif // STRING_UTL_H

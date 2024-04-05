@@ -5,13 +5,19 @@
 #include "struct_utl.h"
 #include "ini_parser.h"
 
+SubStr SubStrFromIni(const IniParserLine &l)
+{
+	return {l.begin, l.end};
+}
+
+
 struct ConfigLoader
 {
 	HashArrayMap<IniParserLine, IniParserLine> *CurrentSection;
 	SubStr CurrentSectionName = "[root]";
 	void *CurrentSectionPointer = nullptr;
-	HashMap<const char*, void*> parsedSecions;
-	HashMap<const char*, GrowArray<void**>> forwardSections;
+	HashMap<IniParserLine, void*> parsedSecions;
+	HashMap<IniParserLine, GrowArray<void**>> forwardSections;
 	IniParser &parser;
 	ConfigLoader(IniParser &p) : CurrentSection(&p.mDict["[root]"]), parsedSecions(), parser(p) {}
 	void SetIndex(int idx){}
@@ -49,7 +55,7 @@ struct Sections
 		{
 			for(auto *node = l.parser.mDict.table[i]; node; node = node->n)
 			{
-				SubStr s = {node->k + 1, node->k + strlen(node->k) - 1};
+				SubStr s = {node->k.begin + 1, node->k.end - 1};
 				SubStr sp, sn;
 				if( s.Split2(sp, sn, '.') && sp.Equals(S::prefix))
 				{
@@ -100,13 +106,14 @@ struct SectionReference_
 		if(str.begin)
 		{
 			char sectionName[256];
-			SubStr s{str,strchr(str, '.')};
-			if(!s.end)
-				s.end = s.begin + strlen(str);
+			SubStr s = SubStrFromIni(str);
+			SubStr s1, s2;
+			if(!s.Split2(s1, s2, '.'))
+				s1 = s;
 			else
-				suffix = strdup(s.end + 1);
-			SBPrint(sectionName, "[%s.%s]", S::prefix, s);
-			auto *n = l.parser.mDict.GetNode(sectionName);
+				suffix = strdup(s2.begin);
+			IniParserLine sn = {sectionName, &sectionName[SBPrint(sectionName, "[%s.%s]", S::prefix, s1) - 1]};
+			auto *n = l.parser.mDict.GetNode(sn);
 			if(!n)
 			{
 				Log("Section %s, key %s: missing config section referenced: %s!\n", ((SectionHeader_*)l.CurrentSectionPointer)->name, str, sectionName);
@@ -246,7 +253,6 @@ struct SourceSection
 {
 	SectionHeader(source);
 	EnumOption(actionType, action_bool, action_float, action_vector2, action_external);
-	// todo: bindings=/user/hand/left/input/grip/pose,/interaction_profiles/valve/index_controller:/user/hand/left/input/select/click
 	StringOption(bindings);
 	StringOption(subactionOverride);
 };
@@ -292,7 +298,7 @@ static int PathIndexFromSuffix(const SubStr &suffix)
 	else if(s2.Len() > 2)
 		return USER_INVALID;
 	for(i = 0; i < USER_INVALID; i++)
-		if(s1.Equals(SubStr(gszUserSuffixes[i],strlen(gszUserSuffixes[i]))))
+		if(s1.Equals(SubStrL(gszUserSuffixes[i])))
 			break;
 	return i;
 }
@@ -301,7 +307,7 @@ struct BindingProfileSection
 {
 	SectionHeader(bindings);
 	struct DynamicActionMaps {
-		HashMap<const char *, ActionMapSection*> maps[USER_PATH_COUNT];
+		HashMap<SubStr, ActionMapSection*> maps[USER_PATH_COUNT];
 		DynamicActionMaps(){}
 		DynamicActionMaps(const DynamicActionMaps &other) = delete;
 		DynamicActionMaps& operator=(const DynamicActionMaps &) = delete;
@@ -312,10 +318,10 @@ struct BindingProfileSection
 				for(int j = 0; j < l.CurrentSection->table[i].count; j++)
 				{
 					char sectionName[256];
-					if(!l.CurrentSection->table[i][j].v)
+					if(!l.CurrentSection->table[i][j].v.begin)
 						continue;
-					SBPrint(sectionName, "[%s.%s]", ActionMapSection::prefix, l.CurrentSection->table[i][j].v.begin );
-					auto *n = l.parser.mDict.GetNode(sectionName);
+					IniParserLine sn = {sectionName, &sectionName[SBPrint(sectionName, "[%s.%s]", ActionMapSection::prefix, SubStrFromIni( l.CurrentSection->table[i][j].v )) - 1]};
+					auto *n = l.parser.mDict.GetNode(sn);
 					if(!n)
 					{
 						Log("Section %s, actionmap %s: missing config section referenced: %s\n", ((SectionHeader_*)l.CurrentSectionPointer)->name, l.CurrentSection->table[i][j].k, sectionName);
@@ -325,19 +331,17 @@ struct BindingProfileSection
 					ActionMapSection *map = (ActionMapSection *)l.parsedSecions[n->k];
 					if(!map)
 						continue;
-					SubStr kk = SubStr(l.CurrentSection->table[i][j].k, strlen(l.CurrentSection->table[i][j].k));
+					SubStr kk = SubStrFromIni(l.CurrentSection->table[i][j].k);
 					SubStr nn, s;
 					if(kk.Split2(nn, s, '.'))
 					{
-						char str[nn.Len() + 1];
-						nn.CopyTo(str, nn.Len() + 1);
-						maps[PathIndexFromSuffix(s)][str] = map;
+						maps[PathIndexFromSuffix(s)][nn] = map;
 					}
 					else
 					{
-						maps[USER_HAND_LEFT][l.CurrentSection->table[i][j].k] = map;
-						maps[USER_HAND_RIGHT][l.CurrentSection->table[i][j].k] = map;
-						maps[USER_INVALID][l.CurrentSection->table[i][j].k] = map;
+						maps[USER_HAND_LEFT][kk] = map;
+						maps[USER_HAND_RIGHT][kk] = map;
+						maps[USER_INVALID][kk] = map;
 					}
 
 					l.CurrentSection->table[i][j].v = {nullptr, nullptr};
@@ -348,7 +352,7 @@ struct BindingProfileSection
 };
 struct Config
 {
-	// SectionHeader name
+	SectionHeader_ h;
 	Config(const Config &other) = delete;
 	Config& operator=(const Config &) = delete;
 	Option(int, serverPort);
