@@ -1,12 +1,36 @@
 #ifndef STRING_UTL_H
 #define STRING_UTL_H
 #include <string.h>
+
+#if defined(__GNUC__)
+#define DEPRECATE(foo, msg) foo __attribute__((deprecated(msg)))
+#elif defined(_MSC_VER)
+#define DEPRECATE(foo, msg) __declspec(deprecated(msg)) foo
+#else
+#define DEPRECATE(foo, msg)
+#endif
+template<typename T> struct ConstWarn {
+	constexpr static bool r = false;
+	DEPRECATE(static void warn(), "non-const buffer"){}
+};
+template<typename T> struct ConstWarn<const T> {
+	constexpr static bool r = true;
+	static void warn(){}
+};
+
 // stringview-like
 struct SubStr
 {
 	const char *begin, *end;
-	template<size_t len>
-	SubStr(const char (&buf)[len]) :begin(buf), end(&buf[len - 1]){}
+	template<typename C, size_t len>
+	SubStr(C (&buf)[len]) :begin(buf), end(&buf[len - 1])
+	{
+		if constexpr(!ConstWarn<C>::r)
+		{
+			end = begin + strnlen(begin,len - 1);
+			ConstWarn<C>::warn();
+		}
+	}
 	SubStr(const char *b, const char *e) : begin(b), end(e){}
 	SubStr(const char *b, size_t len) : begin(b), end(b + len){}
 	SubStr(){}
