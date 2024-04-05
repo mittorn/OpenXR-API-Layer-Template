@@ -161,24 +161,28 @@ template <const auto &NAME>
 struct StringOption_
 {
 	constexpr static const char *name = NAME;
-	const char *val = nullptr;
-	operator const char *()
+	SubStr val = {nullptr, nullptr}; // null-terminated
+	operator const char *() const
 	{
-		return val;
+		return val.begin;
 	}
 	StringOption_(const StringOption_ &other) = delete;
 	StringOption_& operator=(const StringOption_ &) = delete;
 	StringOption_(){}
 	~StringOption_()
 	{
-		if(val)
-			free((void*)val);
-		val = nullptr;
+		if(val.begin)
+			free((void*)val.begin);
+		val = {nullptr, nullptr};
 	}
 	StringOption_(ConfigLoader &l){
 		IniParserLine &str = (*l.CurrentSection)[name];
 		if(str.begin)
-			val = strdup(str);
+		{
+			char *mem = (char*)malloc(str.end - str.begin + 1);
+			memcpy(mem, str.begin, str.end - str.begin + 1);
+			val = {mem, &mem[str.end - str.begin]};
+		}
 		str = {nullptr, nullptr};
 	}
 };
