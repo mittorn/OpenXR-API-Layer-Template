@@ -62,40 +62,199 @@ struct Funcs
 	int hash;
 };
 
+union FuncPriv
+{
+	void *ptr;
+	float val[2];
+};
+
+struct FuncArg
+{
+	void *ctx;
+	FuncPriv *priv;
+};
+
 #define RPN_FUNC(name, ...) #name, ConstHashFunc(#name) & (FUNCMAP_SIZE - 1),  [] (__VA_ARGS__) -> float
 #define FUNC_GROUP(name, ...) constexpr struct funcgroup_##name : Funcs{ float (*pfn)(__VA_ARGS__);} name[]
+#define MATH_WRAP1(x) 	{RPN_FUNC(x,FuncArg &p, float val1) { return x##f(val1); }}
+#define MATH_WRAP2(x) 	{RPN_FUNC(x,FuncArg &p, float val1, float val2) { return x##f(val1, val2); }}
 
-FUNC_GROUP(funcs0, void *p) =
+float SampleNormal() {
+	float u = ((float) rand() / (RAND_MAX)) * 2 - 1;
+	float v = ((float) rand() / (RAND_MAX)) * 2 - 1;
+	float r = u * u + v * v;
+	if (r == 0.0f || r > 1.0f) return SampleNormal();
+	float c = sqrtf(-2.0 * logf(r) / r);
+	return u * c;
+}
+
+static float Middle(float a, float b, float c)
 {
-	{RPN_FUNC(dummy0, void *p) {
-		return 0;
-	}}
+	if((a <= b) && (a <= c))
+		return (b <= c) ? b : c;
+	if((b <= a) && (b <= c))
+		return (a <= c) ? a : c;
+	else
+		return (a <= b) ? a : b;
+}
+
+enum class FrameParm
+{
+	frameStartTime,
+	frameTime,
+	frameCount,
+	displayTime,
+	displayDeltaTime,
+	displayPeriod,
+	shouldRender,
 };
+#define WRAP_SESSION_PARM(x) {RPN_FUNC(x, FuncArg &p) { return GetFrameParm(p.ctx, FrameParm::x);}}
 
-FUNC_GROUP(funcs1, void *p, float val1) =
+static float GetFrameParm(void *w, FrameParm p);
+
+FUNC_GROUP(funcs0, FuncArg &p) =
 {
-	{RPN_FUNC(sin,void *p, float val1) {
-		return sinf(val1);
+	{RPN_FUNC(CONST_PI, FuncArg &p) {
+		return M_PIf;
 	}},
-	{RPN_FUNC(cos,void *p, float val1) {
-		return cosf(val1);
+	{RPN_FUNC(CONST_E, FuncArg &p) {
+		return M_Ef;
 	}},
-	{RPN_FUNC(abs,void *p, float val1) {
-		return fabs(val1);
+	{RPN_FUNC(randuniform, FuncArg &p) {
+		return (float)rand() / RAND_MAX;
+	}},
+	{RPN_FUNC(randnormal, FuncArg &p) {
+		return SampleNormal();
+	}},
+	WRAP_SESSION_PARM(frameStartTime),
+	WRAP_SESSION_PARM(frameTime),
+	WRAP_SESSION_PARM(frameCount),
+	WRAP_SESSION_PARM(displayTime),
+	WRAP_SESSION_PARM(displayDeltaTime),
+	WRAP_SESSION_PARM(displayPeriod),
+	WRAP_SESSION_PARM(shouldRender),
+	{RPN_FUNC(fps, FuncArg &p) {
+		float dt = GetFrameParm(p.ctx, FrameParm::frameTime);
+		if(dt) return 1.0f/dt;
+		return 0.0f;
+	}},
+	{RPN_FUNC(fpsPredicted, FuncArg &p) {
+		float dt = GetFrameParm(p.ctx, FrameParm::displayDeltaTime);
+		if(dt) return 1.0f/dt;
+		return 0.0f;
+	}},
+};
+
+FUNC_GROUP(funcs1, FuncArg &p, float val1) =
+{
+	MATH_WRAP1(sin),
+	MATH_WRAP1(cos),
+	MATH_WRAP1(exp),
+	MATH_WRAP1(tan),
+	MATH_WRAP1(atan),
+	MATH_WRAP1(sinh),
+	MATH_WRAP1(cosh),
+	MATH_WRAP1(tanh),
+	MATH_WRAP1(log),
+	MATH_WRAP1(log10),
+	MATH_WRAP1(sqrt),
+	MATH_WRAP1(fabs),
+	MATH_WRAP1(acosh),
+	MATH_WRAP1(asinh),
+	MATH_WRAP1(atanh),
+	MATH_WRAP1(ceil),
+	{RPN_FUNC(abs,FuncArg &p, float val1) {
+		return fabsf(val1);
+	}},
+	{RPN_FUNC(delay,FuncArg &p, float val1) {
+		float f = p.priv->val[0];
+		p.priv->val[0] = val1;
+		return f;
+	}},
+	{RPN_FUNC(delay2,FuncArg &p, float val1) {
+		float f = p.priv->val[0];
+		p.priv->val[0] = p.priv->val[1];
+		p.priv->val[1] = val1;
+		return f;
+	}},
+	{RPN_FUNC(delta,FuncArg &p, float val1) {
+		float f = p.priv->val[0];
+		p.priv->val[0] = val1;
+		return val1 - f;
+	}},
+	{RPN_FUNC(median,FuncArg &p, float val1) {
+		float f = p.priv->val[0];
+		p.priv->val[0] = p.priv->val[1];
+		p.priv->val[1] = val1;
+		return Middle(f,p.priv->val[0], val1);
+	}},
+	{RPN_FUNC(movavg2,FuncArg &p, float val1) {
+		float f = p.priv->val[0];
+		p.priv->val[0] = val1;
+		return (val1 + f) / 2.0f;
+	}},
+	{RPN_FUNC(movavg3,FuncArg &p, float val1) {
+		float f = p.priv->val[0];
+		p.priv->val[0] = p.priv->val[1];
+		p.priv->val[1] = val1;
+		return (f + p.priv->val[0] + val1) / 3.0f;
+	}},
+	{RPN_FUNC(sign,FuncArg &p, float val1) {
+		if(val1 > 0.0f)
+			return 1.0f;
+		else if(val1 < 0.0f)
+			return -1.0f;
+		else return 0;
+	}},
+	{RPN_FUNC(fract,FuncArg &p, float val1) {
+		return val1 - floorf(val1);
 	}}
 };
 
-FUNC_GROUP(funcs2, void *p, float val1, float val2) =
+FUNC_GROUP(funcs2, FuncArg &p, float val1, float val2) =
 {
-	{RPN_FUNC(dummy2,void*,float val1, float) {
-		return sinf(val1);
+	MATH_WRAP2(fmod),
+	MATH_WRAP2(pow),
+	MATH_WRAP2(atan2),
+	{RPN_FUNC(max,FuncArg &p,float val1, float val2) {
+		return val1 > val2? val2: val1;
+	}},
+	{RPN_FUNC(min,FuncArg &p,float val1, float val2) {
+		return val1 < val2? val2: val1;
+	}},
+	{RPN_FUNC(step,FuncArg &p,float ed, float in) {
+		if(in < ed) return 0.0f;
+		else return 1.0f;
 	}}
 };
 
-FUNC_GROUP(funcs3, void *p, float val1, float val2, float val3) =
+FUNC_GROUP(funcs3, FuncArg &p, float val1, float val2, float val3) =
 {
-	{RPN_FUNC(dummy3,void*,float val1, float, float) {
-		return sinf(val1);
+	{RPN_FUNC(clamp,FuncArg &p,float in, float mi, float ma) {
+		if(in < mi) in = mi;
+		else if(in > ma) in = ma;
+		return in;
+	}},
+	{RPN_FUNC(bounds,FuncArg &p,float mi, float in, float ma) {
+		if(in < mi) in = mi;
+		else if(in > ma) in = ma;
+		return in;
+	}},
+	{RPN_FUNC(mix,FuncArg &p,float in1, float in2, float ctl) {
+		if( ctl > 1.0f) ctl = 1.0f;
+		else if(ctl < 0.0f) ctl = 0.0f;
+		return in1 * ctl + in2 * (1.0f - ctl);
+	}},
+	{RPN_FUNC(middle,FuncArg &p,float a, float b, float c){
+		return Middle(a,b,c);
+	}},
+	{RPN_FUNC(smoothstep,FuncArg &p,float ed0, float ed1, float in) {
+		if(in <= ed0) return 0.0f;
+		else if(in >= ed1) return 1.0f;
+		else return (ed0 - in) / (ed1 - ed0);
+	}},
+	{RPN_FUNC(sel,FuncArg &p,float cond, float a, float b) {
+		return cond != 0.0f? a: b;
 	}}
 };
 
@@ -141,10 +300,8 @@ struct ConstFuncMap : ConstFuncMap<i + 1>
 		}
 	}
 
-	const FuncKV &Find(const SubStr &s) const
+	const FuncKV &Find(size_t hash, const SubStr &s) const
 	{
-		size_t hash = HashFunc<FUNCMAP_SIZE>(s);
-
 		if(hash  == i)
 		{
 			for(int j = 0; j < sizeof(bucket) / sizeof(bucket[0]); j++)
@@ -156,7 +313,7 @@ struct ConstFuncMap : ConstFuncMap<i + 1>
 		}
 		if constexpr(i < FUNCMAP_SIZE - 1)
 		{
-			return ConstFuncMap<i + 1>::Find(s);
+			return ConstFuncMap<i + 1>::Find(hash, s);
 		}
 		return dummy;
 	}
@@ -167,7 +324,8 @@ constexpr auto gConstFuncMap = ConstFuncMap<0>();
 
 unsigned int GetFunc(const SubStr &name)
 {
-	const FuncKV &a = gConstFuncMap.Find(name);
+	size_t hash = HashFunc<FUNCMAP_SIZE>(name);
+	const FuncKV &a = gConstFuncMap.Find(hash, name);
 	if(a.key.Len())
 		return a.index;
 	return 0xFFFFFFFF;
@@ -187,7 +345,11 @@ struct RPNToken
 	{
 		float val;
 		char ch[2];
-		unsigned int funcindex;
+		struct
+		{
+			unsigned int index;
+			FuncPriv priv;
+		} func;
 		float *var;
 		ActionSource src;
 	} d;
@@ -195,9 +357,10 @@ struct RPNToken
 	RPNToken(void *priv, const char *begin, const char *end, bool _op)
 	{
 		SubStr tok{begin,end};
-		if((tok.Len() > 1) && (d.funcindex = GetFunc(tok)) != 0xFFFFFFFF)
+		if((tok.Len() > 1) && (d.func.index = GetFunc(tok)) != 0xFFFFFFFF)
 		{
 			mode = func;
+			memset(&d.func.priv, 0, sizeof(d.func.priv));
 		}
 		else if(_op)
 		{
@@ -258,7 +421,7 @@ struct RPNToken
 		}
 		else if(mode == func)
 		{
-			snprintf(buf, len - 1, "func%d", d.funcindex);
+			snprintf(buf, len - 1, "func%d", d.func.index);
 		}
 		else if(mode == var)
 		{
@@ -272,7 +435,7 @@ struct RPNToken
 	int ArgCount() const
 	{
 		if(mode == func)
-			return d.funcindex & 3;
+			return d.func.index & 3;
 		if(mode != op)
 			return 0;
 		return CalcArgCount(d.ch[0], d.ch[1]);
@@ -290,14 +453,15 @@ struct RPNToken
 #define StackPop(var) auto var = stack[--sp].Val()
 #define StackPush(val) stack[sp++] = val
 	template<size_t stacksize>
-	bool Calculate(void *priv, RPNToken (&stack)[stacksize], size_t &sp)
+	bool Calculate(void *ctx, RPNToken (&stack)[stacksize], size_t &sp)
 	{
 		int ac = ArgCount();
 		if(sp < ac)
 			return false;
 		if(mode == func)
 		{
-			unsigned int funcidx = d.funcindex >> 2;
+			unsigned int funcidx = d.func.index >> 2;
+			FuncArg priv = { ctx, &d.func.priv };
 			if(ac == 0)
 			{
 				StackPush(funcs0[funcidx].pfn(priv));
@@ -560,7 +724,14 @@ struct Layer
 	HashMap<XrSession, SessionState> mSessions;
 	SessionState *mpActiveSession;
 	// must be session-private, but always need most recent
-	XrTime mPredictedTime;
+	XrTime mPredictedTime = 0;
+	XrTime mPrevPredictedTime = 0;
+	XrDuration mPredictedPeriod = 0;
+	unsigned long long mFrameStartTime = 0;
+	unsigned long long mPrevFrameStartTime = 0;
+	unsigned long long mFrameCount;
+	bool mShouldRender;
+
 	bool mTriggerInteractionProfileChanged, mTriggerInteractionProfileChangedOld;
 
 
@@ -804,12 +975,28 @@ struct Layer
 		}
 		return nextLayer_xrGetActionStateVector2f(session, getInfo, state);
 	}
+	static unsigned long long GetTimeU64()
+	{
+		static uint64_t startTime = 0;
+		struct timespec ts;
+		clock_gettime(CLOCK_MONOTONIC, &ts);
+		if(!startTime)
+			startTime = ts.tv_sec;
+		ts.tv_sec -= startTime;
+		return ts.tv_sec*1e9 + ts.tv_nsec;
+	}
 
 	XrResult thisLayer_xrWaitFrame(XrSession session, const XrFrameWaitInfo *frameWaitInfo, XrFrameState *frameState)
 	{
 
 		XrResult res = nextLayer_xrWaitFrame(session, frameWaitInfo, frameState);
+		mPrevPredictedTime = mPredictedTime;
 		mPredictedTime = frameState->predictedDisplayTime;
+		mPredictedPeriod = frameState->predictedDisplayPeriod;
+		mShouldRender = frameState->shouldRender;
+		mPrevFrameStartTime = mFrameStartTime;
+		mFrameStartTime = GetTimeU64();
+		mFrameCount++;
 		return res;
 	}
 
@@ -1422,7 +1609,30 @@ static float *GetVar( void *priv, const SubStr &v )
 	return &w->mpInstance->mRPNVariables[v];
 }
 
+static float GetFrameParm(void *priv, FrameParm p)
+{
+	Layer::SessionState *w = (Layer::SessionState *)priv;
 
+	switch(p)
+	{
+	case FrameParm::frameStartTime:
+		return ((double)w->mpInstance->mFrameStartTime) / 1e9;
+	case FrameParm::frameTime:
+		return ((double)(w->mpInstance->mFrameStartTime - w->mpInstance->mPrevFrameStartTime)) / 1e9;
+	case FrameParm::frameCount:
+		return ((double)w->mpInstance->mFrameCount) / 1e9;
+	case FrameParm::displayTime:
+		return ((double)w->mpInstance->mPredictedTime) / 1e9;
+	case FrameParm::displayDeltaTime:
+		return ((double)(w->mpInstance->mPredictedTime - w->mpInstance->mPrevPredictedTime)) / 1e9;
+	case FrameParm::displayPeriod:
+		return ((double)w->mpInstance->mPredictedPeriod) / 1e9;
+	case FrameParm::shouldRender:
+		return w->mpInstance->mShouldRender;
+	}
+
+	return 0;
+}
 
 Layer Layer::mInstances[max_instances];
 
