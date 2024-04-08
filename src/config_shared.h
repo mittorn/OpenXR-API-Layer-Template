@@ -275,12 +275,18 @@ struct ActionMapSection
 {
 	SectionHeader(actionmap);
 	Option(bool, override);
-	// TODO: RPN or something similar
 	StringOption(axis1);
 	StringOption(axis2);
 	SectionReference(SourceSection, map);
-	EnumOption(customAction, reloadSettings, changeProfile, triggerInteractionChange);
-	SectionReference(BindingProfileSection, profileName);
+};
+
+struct CustomActionSection
+{
+	SectionHeader(custom);
+	StringOption(command);
+	StringOption(condition);
+	Option(float, period);
+	// todo: dynamic set of variables here
 };
 
 static constexpr const char *const gszUserSuffixes[] =
@@ -321,6 +327,7 @@ struct BindingProfileSection
 	SectionHeader(bindings);
 	struct DynamicActionMaps {
 		HashMap<SubStr, ActionMapSection*> maps[USER_PATH_COUNT];
+		GrowArray<CustomActionSection*> customActions;
 		DynamicActionMaps(){}
 		DynamicActionMaps(const DynamicActionMaps &other) = delete;
 		DynamicActionMaps& operator=(const DynamicActionMaps &) = delete;
@@ -333,15 +340,31 @@ struct BindingProfileSection
 					continue;
 				IniParserLine sn = {sectionName, &sectionName[SBPrint(sectionName, "[%s.%s]", ActionMapSection::prefix, SubStrFromIni( node->v )) - 1]};
 				auto *n = l.parser.mDict.GetNode(sn);
+				sn = IniParserLine{sectionName, &sectionName[SBPrint(sectionName, "[%s.%s]", CustomActionSection::prefix, SubStrFromIni( node->v )) - 1]};
+				auto *n1 = l.parser.mDict.GetNode(sn);
+				if(n1)
+				{
+					CustomActionSection *custom = (CustomActionSection *)l.parsedSecions[n1->k];
+					if(custom)
+					{
+						node->v = {nullptr, nullptr};
+						customActions.Add(custom);
+					}
+				}
 				if(!n)
 				{
-					Log("Section %s, actionmap %s: missing config section referenced: %s\n", ((SectionHeader_*)l.CurrentSectionPointer)->name, node->k, sectionName);
+					if(!n1)
+						Log("Section %s, actionmap %s: missing config section referenced: %s\n", ((SectionHeader_*)l.CurrentSectionPointer)->name, node->k, sectionName);
 					continue;
 				}
+
+
 
 				ActionMapSection *map = (ActionMapSection *)l.parsedSecions[n->k];
 				if(!map)
 					continue;
+
+				node->v = {nullptr, nullptr};
 				SubStr kk = SubStrFromIni(node->k);
 				SubStr nn, s;
 				if(kk.Split2(nn, s, '.'))
@@ -354,8 +377,6 @@ struct BindingProfileSection
 					maps[USER_HAND_RIGHT][kk] = map;
 					maps[USER_INVALID][kk] = map;
 				}
-
-				node->v = {nullptr, nullptr};
 			}
 		}
 	} actionMaps;
@@ -369,6 +390,7 @@ struct Config
 	StringOption(interactionProfile);
 	Sections<SourceSection> sources;
 	Sections<ActionMapSection> actionMaps;
+	Sections<CustomActionSection> customActions;
 	Sections<BindingProfileSection> bindings;
 	SectionReference(BindingProfileSection,startupProfile);
 };
