@@ -204,10 +204,35 @@ FUNC_GROUP(funcs1, FuncArg &p, float val1) =
 			return 1.0f;
 		else if(val1 < 0.0f)
 			return -1.0f;
-		else return 0;
+		else return 0.0f;
 	}},
 	{RPN_FUNC(fract,FuncArg &p, float val1) {
 		return val1 - floorf(val1);
+	}},
+	{RPN_FUNC(changed,FuncArg &p, float val1) {
+		float f = p.priv->val[0];
+		p.priv->val[0] = val1;
+		return val1 != f;
+	}},
+	{RPN_FUNC(front,FuncArg &p, float val1) {
+		float f = p.priv->val[0];
+		p.priv->val[0] = val1;
+		return !f && !!val1;
+	}},
+	{RPN_FUNC(back,FuncArg &p, float val1) {
+		float f = p.priv->val[0];
+		p.priv->val[0] = val1;
+		return !!f && !val1;
+	}},
+	{RPN_FUNC(pressDuration,FuncArg &p, float val1) {
+		float f = p.priv->val[0];
+		p.priv->val[0] = val1;
+		if(!val1)
+			return 0.0f;
+		if(!f)
+			p.priv->val[1] = 0.0f;
+		p.priv->val[1] += GetFrameParm(p.ctx, FrameParm::frameTime);
+		return p.priv->val[1];
 	}}
 };
 
@@ -225,6 +250,27 @@ FUNC_GROUP(funcs2, FuncArg &p, float val1, float val2) =
 	{RPN_FUNC(step,FuncArg &p,float ed, float in) {
 		if(in < ed) return 0.0f;
 		else return 1.0f;
+	}},
+	{RPN_FUNC(checkLongClick,FuncArg &p, float in, float duration) {
+		float f = p.priv->val[0];
+		p.priv->val[0] = in;
+		if(!in)
+			return 0.0f;
+		if(!f)
+			p.priv->val[1] = 0.0f;
+		p.priv->val[1] += GetFrameParm(p.ctx, FrameParm::frameTime);
+		return p.priv->val[1] > duration;
+	}},
+	{RPN_FUNC(checkDoubleClick,FuncArg &p, float in, float duration) {
+		float f = p.priv->val[0];
+		p.priv->val[0] = in;
+		if(f && !in)
+			p.priv->val[1] = 0.0f;
+		if(!in)
+			p.priv->val[1] += GetFrameParm(p.ctx, FrameParm::frameTime);
+		if(!!in && (p.priv->val[1] > 0.0f) && (p.priv->val[1] < duration))
+			return 1.0f;
+		else return 0.0f;
 	}}
 };
 
