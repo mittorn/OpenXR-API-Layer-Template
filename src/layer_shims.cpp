@@ -706,6 +706,16 @@ struct Layer
 		GrowArray<RPNToken> data;
 	};
 
+	struct CustomAction
+	{
+		RPNInstance* pRPN;
+		unsigned long long mLastTrigger;
+		unsigned long long mTriggerPeriod;
+		bool mPrevCondition;
+		// todo: make separate type for parsed command contains all string data
+		char command[256];
+	};
+
 	struct SessionState
 	{
 		XrSession mSession = XR_NULL_HANDLE;
@@ -733,6 +743,7 @@ struct Layer
 
 		HashMap<SubStr, RPNInstance> mRPNs;
 		GrowArray<RPNInstance*> mRPNPointers;
+		GrowArray<CustomAction> mCustomActions;
 
 		~SessionState()
 		{
@@ -1193,6 +1204,21 @@ struct Layer
 			mActiveSession = session;
 		}
 		ProcessExternalActions(*mpActiveSession);
+		for(int i = 0; i < mpActiveSession->mCustomActions.count; i++)
+		{
+			CustomAction &c = mpActiveSession->mCustomActions[i];
+			if(mFrameStartTime - c.mLastTrigger > c.mTriggerPeriod )
+			{
+				bool cond = true;
+				if(c.pRPN)
+					cond = Calculate(mpActiveSession, c.pRPN->data);
+				// todo: implement commands
+				if(cond > c.mPrevCondition || !c.pRPN)
+					Log("triggering command: %s\n", c.command);
+				c.mPrevCondition = cond;
+				c.mLastTrigger = mFrameStartTime;
+			}
+		}
 		for(int i = 0; i < mpActiveSession->mLayerActionsBoolean.count; i++)
 		{
 			for(int hand = 0; hand < 2; hand++)
@@ -1354,22 +1380,29 @@ struct Layer
 		s.axisIndex = mapping.Contains( "[1]");
 		return ret;
 	}
+	RPNInstance *AddRPN(SessionState &w, const SubStr &source)
+	{
+		GrowArray<RPNToken> tokens;
+		if(!ParseTokens(&w, tokens, source.begin, source.Len()))
+			return nullptr;
+		RPNInstance &inst = w.mRPNs[source];
+		if(!ShuntingYard(tokens, inst.data))
+			return nullptr;
+		return &inst;
+	}
 
 	void AxisFromConfig(Action &a, int hand, const SubStr &mapping, int axis, SessionState &w)
 	{
 		SourceSection *c = SourceFromConfig(mapping, a.baseState[hand].map.src[axis].handIndex);
 		if(!c)
 		{
-			GrowArray<RPNToken> tokens;
-			if(!ParseTokens(&w, tokens, mapping.begin, mapping.Len()))
-				return;
-			RPNInstance &inst = w.mRPNs[mapping];
-			if(!ShuntingYard(tokens, inst.data))
+			RPNInstance *inst = AddRPN(w, mapping);
+			if(!inst)
 				return;
 			a.baseState[hand].map.src[axis].actionIndex = w.mRPNPointers.count;
 			a.baseState[hand].map.src[axis].funcIndex = 4;
 			a.baseState[hand].map.src[axis].priv = &w;
-			w.mRPNPointers.Add(&inst);
+			w.mRPNPointers.Add(inst);
 			a.baseState[hand].hasAxisMapping = true;
 			return;
 		}
@@ -1410,6 +1443,19 @@ struct Layer
 		w.mBoolIndexes.Clear();
 		w.mFloatIndexes.Clear();
 		w.mVec2Indexes.Clear();
+		w.mCustomActions.Clear();
+		for(int i = 0; i < p->actionMaps.customActions.count; i++)
+		{
+			CustomActionSection *s = p->actionMaps.customActions[i];
+			if(s)
+			{
+				CustomAction a = {nullptr, 0, (unsigned long long)((((double)s->period.val) * 1e9)), false};
+				if(s->condition.val.Len())
+					a.pRPN = AddRPN(w,s->condition.val);
+				s->command.val.CopyTo(a.command);
+				w.mCustomActions.Add(a);
+			}
+		}
 		for(int i = 0; i < w.mActionSetsCount; i++)
 		{
 			ActionSet &set = gActionSetInfos[w.mActionSets[i]];
