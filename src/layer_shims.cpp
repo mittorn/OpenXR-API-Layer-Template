@@ -713,7 +713,7 @@ struct Layer
 		unsigned long long mTriggerPeriod;
 		bool mPrevCondition;
 		// todo: make separate type for parsed command contains all string data
-		char command[256];
+		Command cmd;
 	};
 
 	struct SessionState
@@ -1082,102 +1082,104 @@ struct Layer
 			}
 		}
 	}
-	Action *FindAppSessionAction(SessionState &w, const char *name)
+	Action *FindAppSessionAction(SessionState &w, const SubStr &name)
 	{
 		HASHMAP_FOREACH(w.mActionsBoolean, n)
-			if(!strcmp(n->v.info.actionName, name))
+			if(!strncmp(n->v.info.actionName, name.begin, name.Len()))
 				return &n->v;
 		HASHMAP_FOREACH(w.mActionsFloat, n)
-			if(!strcmp(n->v.info.actionName, name))
+			if(!strncmp(n->v.info.actionName, name.begin, name.Len()))
 				return &n->v;
 		HASHMAP_FOREACH(w.mActionsVec2, n)
-			if(!strcmp(n->v.info.actionName, name))
+			if(!strncmp(n->v.info.actionName, name.begin, name.Len()))
 				return &n->v;
 
 		return nullptr;
 	}
 
+	void ProcessCommand(SessionState &w, const Command &cmd)
+	{
+		switch ( cmd.type )
+		{
+		case EVENT_POLL_DUMP_APP_BINDINGS:
+			for(int i = 0; i < w.mActionSetsCount; i++)
+				DumpActionSet(mActiveSession, gActionSetInfos[w.mActionSets[i]]);
+			break;
+		case EVENT_POLL_RELOAD_CONFIG:
+				config.~Config();
+				LoadConfig(&config);
+				InitProfile(w, config.startupProfile.ptr);
+			break;
+		case EVENT_POLL_SET_PROFILE:
+				InitProfile(w, &config.bindings.mSections[cmd.Str(0)]);
+			break;
+		case EVENT_POLL_MAP_ACTION:
+			{
+				Action *a = FindAppSessionAction(w,cmd.Str(0));
+				ActionMapSection *s = config.actionMaps.mSections.GetPtr(cmd.Str(1));
+				if(a && s)
+					ApplyActionMap(w, *a, s, cmd.args[2].i );
+			}
+			break;
+		case EVENT_POLL_RESET_ACTION:
+			{
+				Action *a = FindAppSessionAction(w, cmd.Str(0));
+				if(a)
+				{
+					for(int i = 0; i < USER_PATH_COUNT; i++)
+					{
+						ActionMapSection *s = config.startupProfile.ptr->actionMaps.maps[i][SubStrB(a->info.actionName)];
+						if(s)
+							ApplyActionMap(w, *a, s, i);
+					}
+				}
+			}
+			break;
+		case EVENT_POLL_SET_EXTERNAL_SOURCE:
+				// todo: add float? Use union?
+				w.mExternalSources[cmd.Str(0)][cmd.args[1].i] = cmd.args[2].f;
+			break;
+		case EVENT_POLL_TRIGGER_INTERACTION_PROFILE_CHANGED: // todo: move to xrPollEvents? Separate queue?
+			mTriggerInteractionProfileChanged = true;
+			mTriggerInteractionProfileChangedOld = false;
+			break;
+		case EVENT_POLL_DUMP_LAYER_BINDINGS:
+			DumpActionSet(w.mSession, mLayerActionSet);
+			break;
+		case EVENT_POLL_MAP_DIRECT_SOURCE:
+			{
+				Action *a = FindAppSessionAction(w,cmd.Str(0));
+				SubStr ss = cmd.Str(2);
+				SubStr base, suf;
+				if(!ss.Split2(base, suf, '.'))
+					base = ss, suf = "";
+				if(a)
+				{
+					SourceSection *s = config.sources.mSections.GetPtr(base);
+					if((int)s->actionType == (int)a->info.actionType)
+						a->baseState[cmd.args[1].i].map.actionIndex = AddSourceToSession(w, a->info.actionType, s->h.name );
+					a->baseState[cmd.args[1].i].map.handIndex = HandFromConfig(*s, suf);
+				}
+			}
+		break;
+		case EVENT_POLL_MAP_AXIS:
+		{
+				Action *a = FindAppSessionAction(w,cmd.Str(0));
+				if(a)
+					AxisFromConfig(*a, cmd.args[1].i, cmd.Str(2), cmd.args[3].i, w);
+		}
+		break;
+		default:
+			break;
+		}
+	}
 	forceinline void ProcessExternalActions(SessionState &w)
 	{
 		if( unlikely( poller.pollLock.TryLock()))
 		{
-			PollEvent ev;
-			while( poller.pollEvents.Dequeue( ev ))
-			{
-				switch ( ev.type )
-				{
-				case EVENT_POLL_DUMP_APP_BINDINGS:
-					for(int i = 0; i < w.mActionSetsCount; i++)
-						DumpActionSet(mActiveSession, gActionSetInfos[w.mActionSets[i]]);
-					break;
-				case EVENT_POLL_RELOAD_CONFIG:
-						config.~Config();
-						LoadConfig(&config);
-						InitProfile(w, config.startupProfile.ptr);
-					break;
-				case EVENT_POLL_SET_PROFILE:
-						InitProfile(w, &config.bindings.mSections[SubStrB(ev.str1)]);
-					break;
-				case EVENT_POLL_MAP_ACTION:
-					{
-						Action *a = FindAppSessionAction(w,ev.str1);
-						ActionMapSection *s = config.actionMaps.mSections.GetPtr(SubStrB(ev.str2));
-						if(a && s)
-							ApplyActionMap(w, *a, s, ev.i1 );
-					}
-					break;
-				case EVENT_POLL_RESET_ACTION:
-					{
-						Action *a = FindAppSessionAction(w,ev.str1);
-						if(a)
-						{
-							for(int i = 0; i < USER_PATH_COUNT; i++)
-							{
-								ActionMapSection *s = config.startupProfile.ptr->actionMaps.maps[i][SubStrB(a->info.actionName)];
-								if(s)
-									ApplyActionMap(w, *a, s, i);
-							}
-						}
-					}
-					break;
-				case EVENT_POLL_SET_EXTERNAL_SOURCE:
-						// todo: add float? Use union?
-						w.mExternalSources[SubStrB(ev.str1)][ev.i1] = ev.f1;
-					break;
-				case EVENT_POLL_TRIGGER_INTERACTION_PROFILE_CHANGED: // todo: move to xrPollEvents? Separate queue?
-					mTriggerInteractionProfileChanged = true;
-					mTriggerInteractionProfileChangedOld = false;
-					break;
-				case EVENT_POLL_DUMP_LAYER_BINDINGS:
-					DumpActionSet(w.mSession, mLayerActionSet);
-					break;
-				case EVENT_POLL_MAP_DIRECT_SOURCE:
-					{
-						Action *a = FindAppSessionAction(w,ev.str1);
-						SubStr ss = SubStrB(ev.str2);
-						SubStr base, suf;
-						if(!ss.Split2(base, suf, '.'))
-							base = ss, suf = "";
-						if(a)
-						{
-							SourceSection *s = config.sources.mSections.GetPtr(base);
-							if((int)s->actionType == (int)a->info.actionType)
-								a->baseState[ev.i1].map.actionIndex = AddSourceToSession(w, a->info.actionType, s->h.name );
-							a->baseState[ev.i1].map.handIndex = HandFromConfig(*s, suf);
-						}
-					}
-				break;
-				case EVENT_POLL_MAP_AXIS:
-				{
-						Action *a = FindAppSessionAction(w,ev.str1);
-						if(a)
-							AxisFromConfig(*a, ev.i1, SubStrB(ev.str2), ev.f1, w);
-				}
-				break;
-				default:
-					break;
-				}
-			}
+			Command cmd;
+			while( poller.pollEvents.Dequeue( cmd ))
+				ProcessCommand(w, cmd);
 			poller.pollLock.Unlock();
 		}
 	}
@@ -1214,7 +1216,7 @@ struct Layer
 					cond = Calculate(mpActiveSession, c.pRPN->data);
 				// todo: implement commands
 				if(cond > c.mPrevCondition || !c.pRPN)
-					Log("triggering command: %s\n", c.command);
+					ProcessCommand(*mpActiveSession, c.cmd);
 				c.mPrevCondition = cond;
 				c.mLastTrigger = mFrameStartTime;
 			}
@@ -1452,7 +1454,7 @@ struct Layer
 				CustomAction a = {nullptr, 0, (unsigned long long)((((double)s->period.val) * 1e9)), false};
 				if(s->condition.val.Len())
 					a.pRPN = AddRPN(w,s->condition.val);
-				s->command.val.CopyTo(a.command);
+				a.cmd = s->command.val;
 				w.mCustomActions.Add(a);
 			}
 		}
