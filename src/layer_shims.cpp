@@ -1446,6 +1446,8 @@ struct Layer
 		w.mFloatIndexes.Clear();
 		w.mVec2Indexes.Clear();
 		w.mCustomActions.Clear();
+		w.mRPNPointers.Clear();
+		w.mRPNs.Clear();
 		for(int i = 0; i < p->actionMaps.customActions.count; i++)
 		{
 			CustomActionSection *s = p->actionMaps.customActions[i];
