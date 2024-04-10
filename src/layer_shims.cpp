@@ -1716,7 +1716,7 @@ static float GetFrameParm(void *priv, FrameParm p)
 	case FrameParm::frameTime:
 		return ((double)(w->mpInstance->mFrameStartTime - w->mpInstance->mPrevFrameStartTime)) / 1e9;
 	case FrameParm::frameCount:
-		return ((double)w->mpInstance->mFrameCount) / 1e9;
+		return w->mpInstance->mFrameCount;
 	case FrameParm::displayTime:
 		return ((double)w->mpInstance->mPredictedTime) / 1e9;
 	case FrameParm::displayDeltaTime:
