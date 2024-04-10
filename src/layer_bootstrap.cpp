@@ -102,7 +102,7 @@ XrResult thisLayer_xrCreateApiLayerInstance(const XrInstanceCreateInfo* info, co
 		return XR_ERROR_LAYER_INVALID;
 	}
 
-	CreateLayerInstance(newInstance, apiLayerInfo->nextInfo->nextGetInstanceProcAddr, enabled_this_layer_extensions, enabled_this_layer_extensions_count);
+	CreateLayerInstance(newInstance, apiLayerInfo->nextInfo->nextGetInstanceProcAddr, enabled_this_layer_extensions, enabled_this_layer_extensions_count, info);
 
 	*instance = newInstance;
 	delete[] extension_list_without_implemented_extensions;

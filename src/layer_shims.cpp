@@ -13,6 +13,8 @@
 #include <math.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
 #include "layer_utl.h"
 #include "config_shared.h"
 #include "layer_events.h"
@@ -22,6 +24,121 @@
 #define DECLARE_NEXT_FUNC(x) PFN_##x nextLayer_##x
 //Load next function pointer
 #define LOAD_NEXT_FUNC(x) nextLayer_xrGetInstanceProcAddr(mInstance, #x, (PFN_xrVoidFunction*)&nextLayer_##x)
+
+struct EventDumper
+{
+	void Dump(const SubStr &name, const SubStr &val)
+	{
+		Log("send %s %s\n", name, val);
+	}
+};
+
+struct EventPoller
+{
+	Thread pollerThread, pipeThread;
+	EventPoller() : pollerThread([](void *poller){
+			EventPoller *p = (EventPoller*)poller;
+			p->Run();
+		},this), pipeThread([](void *poller){
+		EventPoller *p = (EventPoller*)poller;
+		p->RunPipe();
+	},this) {}
+	CycleQueue<Command> pollEvents;
+	SpinLock pollLock;
+	int fd = -1;
+	int pipe_fd = -1;
+	EventHeader mHeader;
+	template <typename T>
+	int Send(const T &data, unsigned char target = 0xF, pid_t targetPid = 0)
+	{
+		EventDumper d;
+		DumpNamedStruct(d, &data);
+		if(fd < 0)
+			return -1;
+		EventPacket p = {mHeader};
+		p.head.target = target;
+		p.head.targetPid = targetPid;
+		p.head.type = T::type;
+		memcpy(&p.data, &data, sizeof(data));
+		return send(fd,&p, ((char*)&p.data - (char*)&p) + sizeof(data), 0);
+	}
+
+	bool InitSocket(unsigned short port)
+	{
+		pipe_fd = open("/tmp/command_pipe", O_RDONLY);
+		if(port > 0)
+		{
+			fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+			sockaddr_in addr;
+			addr.sin_family = AF_INET;
+			addr.sin_addr.s_addr = INADDR_LOOPBACK;
+			addr.sin_port = htons(port);
+			if(connect(fd,(sockaddr *)&addr, sizeof(addr)) < 0)
+			{
+				close(fd);
+				fd = -1;
+			}
+		}
+		return fd >= 0 || pipe_fd >= 0;
+	}
+	void RunPipe()
+	{
+		char buf[256];
+		int pos = 0;
+		while( read(pipe_fd, &buf[pos], 1) > 0 )
+		{
+			if(!Running)
+				return;
+			if(pos >= 255)
+				break;
+			if(buf[pos] == '\n')
+			{
+				buf[pos] = 0;
+				SubStr s = SubStr(buf, pos);
+				pos = 0;
+				Command c = Command(s);
+				Lock l{pollLock};
+				pollEvents.Enqueue(c);
+			}
+			else pos++;
+		}
+	}
+	void Run()
+	{
+		EventPacket p;
+		while( recv(pipe_fd, (void*)&p, sizeof(p), 0) > 0 )
+		{
+			if(!Running)
+				return;
+			if(p.head.type != EVENT_COMMAND)
+				continue;
+			if(p.head.targetPid && p.head.targetPid != mHeader.sourcePid)
+				continue;
+			Lock l{pollLock};
+			pollEvents.Enqueue(p.data.cmd);
+		}
+	}
+	volatile bool Running = false;
+	void Start(int port, const SubStr &name)
+	{
+		mHeader.sourcePid = getpid();
+		name.CopyTo(mHeader.displayName);
+		if(!InitSocket(port))
+			return;
+		Running = true;
+		SyncBarrier();
+		if(fd >= 0)
+			pollerThread.Start();
+		if(pipe_fd >= 0)
+			pipeThread.Start();
+	}
+	void Stop()
+	{
+		Running = false;
+		SyncBarrier();
+		pollerThread.RequestStop();
+	}
+};
 
 static float GetBoolAction(void *priv, int act, int hand, int ax);
 static float GetFloatAction(void *priv, int act, int hand, int ax);
@@ -892,7 +1009,7 @@ struct Layer
 	}
 
 	// Connect this layer to new XrInstance
-	void Initialize(XrInstance inst, PFN_xrGetInstanceProcAddr gpa, const char**exts, uint32_t extcount )
+	void Initialize(XrInstance inst, PFN_xrGetInstanceProcAddr gpa, const char**exts, uint32_t extcount, const XrInstanceCreateInfo* info)
 	{
 		mInstance = inst;
 		// Need this for LOAD_FUNC
@@ -910,8 +1027,12 @@ struct Layer
 			nextLayer_xrStringToPath(inst, mszUserPaths[i], &mUserPaths[i]);
 		LoadConfig(&config);
 		DumpConfig(config);
-		if(config.serverPort)
-			poller.Start(config.serverPort);
+		poller.Start(config.serverPort, SubStrB(info->applicationInfo.applicationName));
+		AppReg reg;
+		SubStrB(info->applicationInfo.applicationName).CopyTo(reg.name.val);
+		reg.version.val = info->applicationInfo.applicationVersion;
+		SubStrB(info->applicationInfo.engineName).CopyTo(reg.engine.val);
+		poller.Send(reg);
 	}
 
 	// Only need this if extensions used
@@ -1614,6 +1735,10 @@ struct Layer
 			if(likely(eventData->type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED))
 			{
 				XrEventDataSessionStateChanged *eSession = (XrEventDataSessionStateChanged*) eventData;
+				AppSession s;
+				s.handle.val = (unsigned long long)eSession->session;
+				s.state.val = eSession->state;
+				poller.Send(s, TARGET_BUS | TARGET_CLI | TARGET_GUI);
 				if(unlikely(eSession->state >= XR_SESSION_STATE_IDLE && eSession->state <= XR_SESSION_STATE_FOCUSED && mActiveSession != eSession->session))
 				{
 					mActiveSession = eSession->session;
@@ -1797,7 +1922,7 @@ struct FunctionPointerGenerator
 #define GET_WRAPPER(Type, Method, i) FunctionPointerGenerator(&Type::Method).getFunc<&Type::Method>(i)
 
 //Create Layer context for XrInstance
-bool CreateLayerInstance(XrInstance instance, PFN_xrGetInstanceProcAddr gpa, const char **exts, uint32_t extcount)
+bool CreateLayerInstance(XrInstance instance, PFN_xrGetInstanceProcAddr gpa, const char **exts, uint32_t extcount, const XrInstanceCreateInfo* info)
 {
 	int i = Layer::FindInstance(instance);
 	if( i < 0 )
@@ -1809,7 +1934,7 @@ bool CreateLayerInstance(XrInstance instance, PFN_xrGetInstanceProcAddr gpa, con
 		return false;
 	}
 	Layer &lInstance = Layer::mInstances[i];
-	lInstance.Initialize(instance, gpa, exts, extcount);
+	lInstance.Initialize(instance, gpa, exts, extcount, info);
 	return true;
 }
 

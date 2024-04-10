@@ -10,4 +10,4 @@
 
 #include "openxr/openxr.h"
 
-bool CreateLayerInstance(XrInstance instance, PFN_xrGetInstanceProcAddr gpa, const char **exts, uint32_t extcount);
+bool CreateLayerInstance(XrInstance instance, PFN_xrGetInstanceProcAddr gpa, const char **exts, uint32_t extcount, const XrInstanceCreateInfo *info);
