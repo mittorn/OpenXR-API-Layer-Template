@@ -268,7 +268,30 @@ struct CustomActionSection
 	StringOption(command);
 	StringOption(condition);
 	Option(float, period);
-	// todo: dynamic set of variables here
+	struct DynamicVars
+	{
+		GrowArray<SubStr> vars;
+		DynamicVars(){}
+		DynamicVars(ConfigLoader &l)
+		{
+			HASHMAP_FOREACH((*l.CurrentSection), node)
+			{
+				if(!node->v.begin)
+					continue;
+				if(node->k.begin[0] != '$')
+					continue;
+				size_t len = (node->k.end - node->k.begin) + (node->v.end - node->v.begin) + sizeof(" = ()");
+				char *mem = (char*)malloc(len);
+				SNPrint(mem, len, "%s = (%s)", node->k, node->v);
+				vars.Add({mem, mem + len});
+			}
+		}
+		~DynamicVars()
+		{
+			for(int i = 0; i < vars.count; i++)
+				vars[i].Free();
+		}
+	} vars;
 };
 
 static constexpr const char *const gszUserSuffixes[] =
