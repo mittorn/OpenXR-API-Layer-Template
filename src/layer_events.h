@@ -3,7 +3,31 @@
 #include "layer_utl.h"
 #include "thread_utl.h"
 
-enum EventType{
+enum TargetFlags : unsigned char
+{
+	TARGET_APP = 1U << 0,
+	TARGET_BUS = 1U << 1,
+	TARGET_CLI = 1U << 2,
+	TARGET_GUI = 1U << 3
+};
+
+enum EventType : unsigned char
+{
+	EVENT_APP_REGISTER,
+	EVENT_APP_VAR,
+	EVENT_APP_ACTION,
+	EVENT_APP_ACTION_SET,
+	EVENT_APP_SOURCE,
+	EVENT_APP_PROFILE,
+	EVENT_APP_ACTION_MAP,
+	EVENT_APP_CUSTOM_ACTION,
+	EVENT_APP_BINDING,
+	EVENT_APP_RPN,
+	EVENT_DIAGMSG,
+	EVENT_COMMAND
+};
+
+enum CommandType{
 	EVENT_POLL_NULL,
 	EVENT_POLL_TRIGGER_INTERACTION_PROFILE_CHANGED,
 	EVENT_POLL_RELOAD_CONFIG,
@@ -21,7 +45,7 @@ enum EventType{
 
 struct CommandHeader
 {
-	EventType type;
+	CommandType type;
 	union{
 		unsigned int i;
 		float f;
@@ -137,12 +161,120 @@ struct Command : CommandHeader
 		return {&data[args[index].offsets[0]], &data[args[index].offsets[1]]};
 	}
 };
-struct PollEvent{
+
+#define Field(type,name) \
+constexpr static const char fld_name_##name[] = #name; \
+	Field_<type, fld_name_##name, sizeof(fld_name_##name) - 1> name
+
+template <typename T, const auto &NAME, size_t nlen>
+struct Field_
+{
+	constexpr static const char *name = NAME;
+	T val;
+	operator T() const
+	{
+		return val;
+	}
+	Field_(const Field_ &other) = delete;
+	Field_& operator=(const Field_ &) = delete;
+	Field_(){}
+	Field_(const T &def):val(def){}
+	template <typename DumperType>
+	Field_(Dumper<DumperType> &l){
+		char s[32];
+		SBPrint(s, "%f", (float)l.GetData(this).val);
+		l.d.Dump(SubStr(NAME,nlen), SubStrB(s));
+	}
+};
+
+#define StringField(name, len) \
+constexpr static const char fld_name_##name[] = #name; \
+	StringField_<fld_name_##name, sizeof(fld_name_##name) - 1, len> name
+
+template <const auto &NAME, size_t nlen, size_t len>
+struct StringField_
+{
+	constexpr static const char *name = NAME;
+	char val[len];
+	StringField_(const StringField_ &other) = delete;
+	StringField_& operator=(const StringField_ &) = delete;
+	StringField_(){}
+	StringField_(const SubStr &def):val(){ def.CopyTo(val);}
+	template <typename DumperType>
+	StringField_(Dumper<DumperType> &l){
+		l.d.Dump(SubStr(NAME,nlen), SubStrB(l.GetData(this).val));
+	}
+};
+
+struct EventHeader
+{
+	TargetFlags target;
 	EventType type;
-	int i1;
-	float f1;
-	char str1[32];
-	char str2[32];
+	char displayName[14];
+	pid_t targetPid, sourcePid;
+	union EventData
+	{
+		Command cmd;
+		struct AppRegister
+		{
+			Field(pid_t,pid);
+		} appReg;
+		struct AppVar
+		{
+			StringField(name,32);
+			Field(float,value);
+		} appVar;
+		struct AppAction
+		{
+			Field(unsigned long long,handle);
+			StringField(setName,32);
+			StringField(actName,32);
+		} appAct;
+		struct AppBinding
+		{
+			Field(unsigned long long,handle);
+			StringField(path,32);
+			StringField(description,32);
+		} appBinding;
+		struct AppSource
+		{
+			StringField(name,32);
+			Field(int, index);
+			Field(float,x);
+			Field(float,y);
+		} appSource;
+		struct AppRPN
+		{
+			StringField(source,64);
+			Field(unsigned char,context);
+			Field(int,index);
+			StringField(rpn,64);
+		} appRPN;
+		struct AppActionMap
+		{
+			StringField(actName,32);
+			Field(int,mapIndex);
+			Field(int,funcIndex);
+			Field(int,actionIndex);
+			Field(int,axisIndex);
+			Field(int,handIndex);
+		} appActionMap;
+
+		struct AppCustomAction
+		{
+			Field(int, index);
+			StringField(command, 64);
+			StringField(condition, 64);
+			Field(float, triggerPeriod);
+		} appCustomAction;
+
+		struct DiagMsg
+		{
+			Field(unsigned int,level);
+			Field(unsigned int,code);
+			StringField(message, 64);
+		} diagMsg;
+	} data;
 };
 
 struct EventPoller

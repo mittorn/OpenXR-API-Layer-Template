@@ -10,7 +10,6 @@ SubStr SubStrFromIni(const IniParserLine &l)
 	return {l.begin, l.end};
 }
 
-
 struct ConfigLoader
 {
 	HashArrayMap<IniParserLine, IniParserLine> *CurrentSection;
@@ -24,8 +23,6 @@ struct ConfigLoader
 	void End(size_t size){}
 };
 
-
-
 struct SectionHeader_
 {
 	SubStr name = {nullptr, nullptr};
@@ -34,10 +31,14 @@ struct SectionHeader_
 	SectionHeader_& operator=(const SectionHeader_ &) = delete;
 	SectionHeader_(ConfigLoader &l) : name(l.CurrentSectionName){
 	}
+	template <typename DumperType>
+	SectionHeader_(Dumper<DumperType> &l){
+			l.d.Dump("section",l.GetData(this).name);
+	}
 };
 #define SectionHeader(PREFIX) \
 constexpr static const char prefix[] = #PREFIX; \
-	SectionHeader_ h;
+	SectionHeader_ h
 
 template <typename S>
 struct Sections
@@ -79,8 +80,18 @@ struct Sections
 			}
 		}
 	}
+	template <typename DumperType>
+	Sections(Dumper<DumperType> &l){
+		HASHMAP_FOREACH(l.GetData(this).mSections, node)
+		{
+			l.d.Dump(SubStrL(S::prefix), node->v.h.name);
+			l.d.Dump("begin", node->v.h.name);
+			DumpNamedStruct(l.d, &node->v);
+			l.d.Dump("end", node->v.h.name);
+			// todo: enter the section
+		}
+	}
 };
-
 
 template <typename S, const auto &NAME, size_t nlen>
 struct SectionReference_
@@ -120,11 +131,14 @@ struct SectionReference_
 		}
 		str = {nullptr, nullptr};
 	}
+	template <typename DumperType>
+	SectionReference_(Dumper<DumperType> &l){
+		l.d.Dump(SubStr(NAME,nlen), l.GetData(this).ptr?l.GetData(this).ptr->h.name : "null");
+	}
 };
 #define SectionReference(type,name) \
 constexpr static const char opt_name_##name[] = #name; \
-	SectionReference_<type, opt_name_##name, sizeof(opt_name_##name) - 1> name;
-
+	SectionReference_<type, opt_name_##name, sizeof(opt_name_##name) - 1> name
 
 template <typename T, const auto &NAME, size_t nlen>
 struct Option_
@@ -145,12 +159,16 @@ struct Option_
 			val = (T)atof(str);
 		str ={nullptr, nullptr};
 	}
+	template <typename DumperType>
+	Option_(Dumper<DumperType> &l){
+		char s[32];
+		SBPrint(s, "%f", (float)l.GetData(this).val);
+		l.d.Dump(SubStr(NAME, nlen), SubStrB(s));
+	}
 };
 #define Option(type,name) \
 constexpr static const char opt_name_##name[] = #name; \
-	Option_<type, opt_name_##name, sizeof(opt_name_##name) - 1> name;
-
-
+	Option_<type, opt_name_##name, sizeof(opt_name_##name) - 1> name
 
 template <const auto &NAME, size_t nlen>
 struct StringOption_
@@ -176,11 +194,15 @@ struct StringOption_
 		}
 		str = {nullptr, nullptr};
 	}
+	template <typename DumperType>
+	StringOption_(Dumper<DumperType> &l){
+		l.d.Dump(SubStr(NAME,nlen), l.GetData(this).val);
+	}
 };
 
 #define StringOption(name) \
 constexpr static const char opt_name_##name[] = #name; \
-	StringOption_<opt_name_##name, sizeof(opt_name_##name) - 1> name;
+	StringOption_<opt_name_##name, sizeof(opt_name_##name) - 1> name
 
 #define IsDelim(c) (!(c) || ((c) == ' '|| (c) == ','))
 static size_t GetEnum(const char *scheme, const char *val)
@@ -209,7 +231,6 @@ static size_t GetEnum(const char *scheme, const char *val)
 	}
 }
 
-
 template <typename T, const auto &NAME, size_t nlen, const auto &SCHEME>
 struct EnumOption_
 {
@@ -231,6 +252,12 @@ struct EnumOption_
 		else
 			val = (T)0;
 		str = {nullptr, nullptr};
+	}
+	template <typename DumperType>
+	EnumOption_(Dumper<DumperType> &l){
+		char s[32];
+		SBPrint(s, "%f", (float)l.GetData(this).val);
+		l.d.Dump(SubStr(NAME,nlen), SubStrB(s));
 	}
 };
 
@@ -290,6 +317,11 @@ struct CustomActionSection
 		{
 			for(int i = 0; i < vars.count; i++)
 				vars[i].Free();
+		}
+		template <typename DumperType>
+		DynamicVars(Dumper<DumperType> &l){
+			for(int i = 0; i < vars.count; i++)
+				l.d.Dump("var", l.GetData(this).vars[i]);
 		}
 	} vars;
 };
@@ -384,8 +416,13 @@ struct BindingProfileSection
 				}
 			}
 		}
+		template <typename DumperType>
+		DynamicActionMaps(Dumper<DumperType> &l){
+			// todo
+		}
 	} actionMaps;
 };
+
 struct Config
 {
 	SectionHeader_ h;
@@ -420,4 +457,20 @@ static void LoadConfig(Config *c)
 
 	Log("ServerPort %d\n", (int)c->serverPort);
 }
+
+struct ConfigDumper
+{
+	void Dump(const SubStr &a, const SubStr &b)
+	{
+		Log("%s %s\n", a, b);
+	}
+};
+
+static void DumpConfig(Config &c)
+
+{
+	ConfigDumper d;
+	DumpNamedStruct(d, &c);
+}
+
 #endif // CONFIG_SHARED_H
