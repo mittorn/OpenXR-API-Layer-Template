@@ -104,6 +104,24 @@ struct SubStr
 		// todo: fallback for this non-standart func
 		return !!memmem(begin, Len(), other.begin, other.Len());
 	}
+
+	SubStr StrDup() const
+	{
+		char *mem = Len()?(char*)malloc(Len() + 1) : nullptr;
+		if(mem)
+		{
+			memcpy(mem, begin, Len());
+			mem[Len()] = 0;
+			return {mem, mem + Len()};
+		}
+		return {nullptr, nullptr};
+	}
+	void Free()
+	{
+		if(begin)
+			free((char*)begin);
+		begin = end = nullptr;
+	}
 };
 
 template<size_t len>

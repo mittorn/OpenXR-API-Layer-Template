@@ -93,9 +93,7 @@ struct SectionReference_
 	SectionReference_(){}
 	~SectionReference_()
 	{
-		if(suffix.begin)
-			free((void*)suffix.begin);
-		suffix = {nullptr, nullptr};
+		suffix.Free();
 	}
 	SectionReference_(ConfigLoader &l)
 	{
@@ -108,15 +106,7 @@ struct SectionReference_
 			if(!s.Split2(s1, s2, '.'))
 				s1 = s;
 			else
-			{
-				char *mem = (char*)malloc(s2.Len() + 1);
-				if(mem)
-				{
-					memcpy(mem, s2.begin, s2.Len() + 1);
-					suffix = {mem, mem + s2.Len()};
-				}
-				else Log("OOM\n");
-			}
+				suffix = s2.StrDup();
 			IniParserLine sn = {sectionName, &sectionName[SBPrint(sectionName, "[%s.%s]", S::prefix, s1) - 1]};
 			auto *n = l.parser.mDict.GetNode(sn);
 			if(!n)
@@ -176,21 +166,13 @@ struct StringOption_
 	StringOption_(){}
 	~StringOption_()
 	{
-		if(val.begin)
-			free((void*)val.begin);
-		val = {nullptr, nullptr};
+		val.Free();
 	}
 	StringOption_(ConfigLoader &l){
 		IniParserLine &str = (*l.CurrentSection)[IniParserLine{(char*)NAME, (char*)&NAME[nlen]}];
 		if(str.begin)
 		{
-			char *mem = (char*)malloc(str.end - str.begin + 1);
-			if(mem)
-			{
-				memcpy(mem, str.begin, str.end - str.begin + 1);
-				val = {mem, &mem[str.end - str.begin]};
-			}
-			else Log("OOM\n");
+			val = SubStrFromIni(str).StrDup();
 		}
 		str = {nullptr, nullptr};
 	}
