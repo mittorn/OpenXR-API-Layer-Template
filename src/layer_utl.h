@@ -7,6 +7,7 @@
 #define FMT_ENABLE_STDIO
 #include "fmt_util.h"
 #include "string_utl.h"
+#include "struct_utl.h"
 
 // fmt_util extension
 template<typename Buf>
@@ -56,5 +57,34 @@ constexpr size_t ConstHashFunc(const char (&ch)[l])
 	return hash;
 }
 
+template <typename DumperType>
+struct Dumper
+{
+	char *base;
+	char *tmpbase;
+	int index = -1;
+	void SetIndex(int idx)
+	{
+		index = idx;
+	}
+	template <typename T>
+	T& GetData(T* tempptr)
+	{
+		if(index == 0)
+			tmpbase = (char*)tempptr;
+		return *(T*)(base + ((char*)tempptr - tmpbase));
+	}
+	void End(size_t sz){}
+	DumperType &d;
+	Dumper(DumperType &d1) : d(d1){}
+};
+
+template <typename DumperType, typename T>
+void DumpNamedStruct(DumperType &d, T *data)
+{
+	Dumper<DumperType> t = {d};
+	t.base = (char*)data;
+	ConstructorVisitor<T, Dumper<DumperType>>().Construct(t);
+}
 
 #define Log(...) FPrint(stderr, __VA_ARGS__)

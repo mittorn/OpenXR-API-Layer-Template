@@ -704,6 +704,7 @@ struct Layer
 	struct RPNInstance
 	{
 		GrowArray<RPNToken> data;
+		RPNInstance *next = nullptr;
 	};
 
 	struct CustomAction
@@ -908,6 +909,7 @@ struct Layer
 		for(int i = 0; i < USER_INVALID; i++)
 			nextLayer_xrStringToPath(inst, mszUserPaths[i], &mUserPaths[i]);
 		LoadConfig(&config);
+		DumpConfig(config);
 		if(config.serverPort)
 			poller.Start(config.serverPort);
 	}
@@ -1215,8 +1217,19 @@ struct Layer
 				if(c.pRPN)
 					cond = Calculate(mpActiveSession, c.pRPN->data);
 				// todo: implement commands
-				if(cond > c.mPrevCondition || !c.pRPN)
+				if(cond > c.mPrevCondition || c.mTriggerPeriod)
+				{
+					if(c.pRPN)
+					{
+						RPNInstance *var = c.pRPN->next;
+						while(var)
+						{
+							Calculate(mpActiveSession, var->data);
+							var = var->next;
+						}
+					}
 					ProcessCommand(*mpActiveSession, c.cmd);
+				}
 				c.mPrevCondition = cond;
 				c.mLastTrigger = mFrameStartTime;
 			}
@@ -1456,6 +1469,22 @@ struct Layer
 				CustomAction a = {nullptr, 0, (unsigned long long)((((double)s->period.val) * 1e9)), false};
 				if(s->condition.val.Len())
 					a.pRPN = AddRPN(w,s->condition.val);
+				if(s->vars.vars.count )
+				{
+					if(!s->condition.val.Len())
+						a.pRPN = AddRPN(w,"1");
+					if(a.pRPN)
+					{
+						RPNInstance *prev = a.pRPN;
+						for(int i = 0; i < s->vars.vars.count; i++)
+						{
+							prev->next = AddRPN(w, s->vars.vars[i]);
+							if(prev->next)
+								prev = prev->next;
+						}
+					}
+				}
+
 				a.cmd = s->command.val;
 				w.mCustomActions.Add(a);
 			}
