@@ -48,35 +48,52 @@ struct EventPoller
 	int fd = -1;
 	int pipe_fd = -1;
 	EventHeader mHeader;
+	sockaddr_in mPeerAddr {};
+	bool mServer;
 	template <typename T>
 	int Send(const T &data, unsigned char target = 0xF, pid_t targetPid = 0)
 	{
 		EventDumper d;
 		DumpNamedStruct(d, &data);
-		if(fd < 0)
+		if(fd < 0 || mPeerAddr.sin_addr.s_addr == htons(INADDR_ANY))
 			return -1;
 		EventPacket p = {mHeader};
 		p.head.target = target;
 		p.head.targetPid = targetPid;
 		p.head.type = T::type;
 		memcpy(&p.data, &data, sizeof(data));
-		return send(fd,&p, ((char*)&p.data - (char*)&p) + sizeof(data), 0);
+		return sendto(fd,&p, ((char*)&p.data - (char*)&p) + sizeof(data), 0, (sockaddr*)&mPeerAddr, sizeof(mPeerAddr));
 	}
 
-	bool InitSocket(unsigned short port)
+	bool _InitSocket(unsigned short port)
 	{
 		pipe_fd = open("/tmp/command_pipe", O_RDONLY);
 		if(port > 0)
 		{
 			fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-			sockaddr_in addr;
+			int reuse = 1;
+			setsockopt(	fd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(int));
+			sockaddr_in addr = {};
 			addr.sin_family = AF_INET;
-			addr.sin_addr.s_addr = INADDR_LOOPBACK;
+			addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
 			addr.sin_port = htons(port);
-			if(connect(fd,(sockaddr *)&addr, sizeof(addr)) < 0)
+			if(mServer)
 			{
-				close(fd);
-				fd = -1;
+				if(bind(fd,(sockaddr *)&addr, sizeof(addr)) < 0)
+				{
+					close(fd);
+					fd = -1;
+				}
+				mPeerAddr.sin_addr.s_addr = INADDR_ANY;
+			}
+			else
+			{
+				if(connect(fd,(sockaddr *)&addr, sizeof(addr)) < 0)
+				{
+					close(fd);
+					fd = -1;
+				}
+				mPeerAddr = addr;
 			}
 		}
 		return fd >= 0 || pipe_fd >= 0;
@@ -103,27 +120,42 @@ struct EventPoller
 			else pos++;
 		}
 	}
+	void _ProcessPacket(EventPacket &p)
+	{
+		if(p.head.targetPid && p.head.targetPid != mHeader.sourcePid)
+			return;
+		if(p.head.type == EVENT_CLIENT_REGISTER)
+		{
+			AppReg reg = {};
+			usleep(10000);
+			Send(reg, TARGET_CLI, p.head.sourcePid);
+			return;
+		}
+
+		if(p.head.type != EVENT_COMMAND)
+			return;
+		Lock l{pollLock};
+		pollEvents.Enqueue(p.data.cmd);
+	}
 	void Run()
 	{
 		EventPacket p;
-		while( recv(pipe_fd, (void*)&p, sizeof(p), 0) > 0 )
+		socklen_t len = sizeof(mPeerAddr);
+		while(recvfrom(fd, (void*)&p, sizeof(p), 0, (sockaddr *)&mPeerAddr, &len) > 0)
 		{
 			if(!Running)
 				return;
-			if(p.head.type != EVENT_COMMAND)
-				continue;
-			if(p.head.targetPid && p.head.targetPid != mHeader.sourcePid)
-				continue;
-			Lock l{pollLock};
-			pollEvents.Enqueue(p.data.cmd);
+
+			_ProcessPacket(p);
 		}
 	}
 	volatile bool Running = false;
-	void Start(int port, const SubStr &name)
+	void Start(bool server, int port, const SubStr &name)
 	{
+		mServer = server;
 		mHeader.sourcePid = getpid();
 		name.CopyTo(mHeader.displayName);
-		if(!InitSocket(port))
+		if(!_InitSocket(port))
 			return;
 		Running = true;
 		SyncBarrier();
@@ -1027,7 +1059,7 @@ struct Layer
 			nextLayer_xrStringToPath(inst, mszUserPaths[i], &mUserPaths[i]);
 		LoadConfig(&config);
 		DumpConfig(config);
-		poller.Start(config.serverPort, SubStrB(info->applicationInfo.applicationName));
+		poller.Start(config.ipcMode == Config::server, config.serverPort, SubStrB(info->applicationInfo.applicationName));
 		AppReg reg;
 		SubStrB(info->applicationInfo.applicationName).CopyTo(reg.name.val);
 		reg.version.val = info->applicationInfo.applicationVersion;
@@ -1222,7 +1254,7 @@ struct Layer
 
 	void ProcessCommand(SessionState &w, const Command &cmd)
 	{
-		switch ( cmd.type )
+		switch ( cmd.ctype )
 		{
 		case EVENT_POLL_DUMP_APP_BINDINGS:
 			for(int i = 0; i < w.mActionSetsCount; i++)

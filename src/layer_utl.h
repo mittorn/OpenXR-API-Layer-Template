@@ -80,7 +80,7 @@ struct Dumper
 };
 
 template <typename DumperType, typename T>
-void DumpNamedStruct(DumperType &d, T *data)
+void DumpNamedStruct(DumperType &d, const T *data)
 {
 	Dumper<DumperType> t = {d};
 	t.base = (char*)data;

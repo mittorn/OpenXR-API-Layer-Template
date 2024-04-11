@@ -60,13 +60,15 @@ configure_file(
 )
 
 #TODO make this a bit nicer
-file(GLOB layer_src CONFIGURE_DEPENDS src/*)
+file(GLOB layer_src CONFIGURE_DEPENDS src/layer_*.cpp)
 
 add_library(${library_name} SHARED ${layer_src} ${CMAKE_SOURCE_DIR}/README.md)
 target_include_directories(${library_name} PRIVATE
 	${CMAKE_SOURCE_DIR}/OpenXR-SDK/src/loader
 	${CMAKE_SOURCE_DIR}/OpenXR-SDK/src/common
 	${CMAKE_SOURCE_DIR}/OpenXR-SDK/include)
+
+add_executable(client_simple src/client_simple.cpp)
 
 add_custom_target(install_manifest
 	COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/manifest.json ${layer_directory})
