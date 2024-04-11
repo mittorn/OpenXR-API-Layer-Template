@@ -22,7 +22,8 @@ enum EventType : unsigned char
 	EVENT_APP_RPN,
 	EVENT_APP_SESSION,
 	EVENT_DIAGMSG,
-	EVENT_COMMAND
+	EVENT_COMMAND,
+	EVENT_CLIENT_REGISTER
 };
 
 enum CommandType{
@@ -180,7 +181,7 @@ struct Field_
 	Field_(const T &def):val(def){}
 	template <typename DumperType>
 	Field_(Dumper<DumperType> &l){
-		char s[32];
+		char s[32] = {0};
 		if constexpr(sizeof(T) == 8 && ((T)0.1 == (T)0.0))
 			SBPrint(s, "%lld", (unsigned long long)l.GetData(this).val);
 		else
@@ -301,6 +302,12 @@ struct DiagMsg
 	StringField(message, 64);
 };
 
+struct ClientReg
+{
+	constexpr static EventType type = EVENT_CLIENT_REGISTER;
+	Field(bool,gui);
+};
+
 struct EventHeader
 {
 	unsigned char target;
@@ -326,7 +333,26 @@ struct EventPacket
 		AppActionMap appActionMap;
 		AppCustomAction appCustomAction;
 		DiagMsg diagMsg;
+		ClientReg clReg;
 	} data;
 };
+
+// todo: polymorphic storage/array/growarray/queue?
+
+template <typename Handler, typename T, typename... Ts>
+static void HandlePacketImpl(const Handler &h, const EventPacket &p)
+{
+	if(p.head.type == T::type)
+		h.Handle(*(T*)&p.data);
+	else
+		HandlePacketImpl<Handler, Ts...>(h, p);
+}
+template <typename Handler>static void HandlePacketImpl(const Handler &h, const EventPacket &p){}
+
+template <typename Handler>
+static void HandlePacket(const Handler &h, const EventPacket &p)
+{
+	HandlePacketImpl<Handler, AppReg, AppVar, AppSession, AppAction, AppActionSet, AppBinding, AppSource, AppRPN, AppActionMap, AppCustomAction, DiagMsg, ClientReg>(h, p);
+}
 
 #endif // LAYER_EVENTS_H

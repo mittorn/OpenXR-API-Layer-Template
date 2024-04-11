@@ -269,7 +269,7 @@ enum name ## _enum { \
 }; \
 	constexpr static const char name ## _name[] = #name; \
 	constexpr static const char *name ## _scheme = #__VA_ARGS__; \
-	EnumOption_<name ## _enum, name ## _name , sizeof(name ## _name) - 1, name ## _scheme> name;
+	EnumOption_<name ## _enum, name ## _name , sizeof(name ## _name) - 1, name ## _scheme> name
 
 struct SourceSection
 {
@@ -428,6 +428,7 @@ struct Config
 	SectionHeader_ h;
 	Config(const Config &other) = delete;
 	Config& operator=(const Config &) = delete;
+	EnumOption(ipcMode, server, bus);
 	Option(int, serverPort);
 	StringOption(interactionProfile);
 	Sections<SourceSection> sources;
