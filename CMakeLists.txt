@@ -13,6 +13,9 @@ set(layer_name        "XR_APILAYER_VENDORID_test_me") # This name *must* be of t
 set(layer_version     "1")
 set(layer_description "This is a sample OpenXR layer that doesn't do anything useful.'")
 
+option(ENABLE_GUI "Enable Dear ImGui GUI" ON)
+set(USE_SDL "2" CACHE STRING "Use SDL2 or SDL3 (0 is use GLFW)")
+
 #To add extension declaration to the layer manifest file, fill these two string lists : "extensions" and "extension_versions"
 #These two needs to match in lenght
 list(APPEND extensions "XR_TEST_test_me")
@@ -61,6 +64,49 @@ configure_file(
 
 #TODO make this a bit nicer
 file(GLOB layer_src CONFIGURE_DEPENDS src/layer_*.cpp)
+
+if(ENABLE_GUI)
+set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/imgui)
+set(imgui_src ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_demo.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_tables.cpp ${IMGUI_DIR}/imgui_widgets.cpp src/imgui_gl_dynamic.cpp)
+#find_package(OpenGL)
+
+if(USE_SDL STREQUAL "2")
+message( "It Worked" )
+# cmake is a sheeet
+find_package(SDL2 REQUIRED)
+find_package(SDL2 REQUIRED CONFIG REQUIRED COMPONENTS SDL2)
+find_package(SDL2 REQUIRED CONFIG COMPONENTS SDL2main)
+find_file(SDL2_INCLUDE_DIR NAME SDL.h HINTS SDL2 REQUIRED)
+find_library(SDL2_LIBRARY NAME SDL2)
+set(imgui_platform ${IMGUI_DIR}/backends/imgui_impl_sdl2.cpp ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer2.cpp)
+if(TARGET SDL2::SDL2main)
+set(imgui_libraries SDL2::SDL2 SDL2::SDL2main)
+else()
+set(imgui_libraries SDL2::SDL2)
+endif()
+elseif(USE_SDL STREQUAL "3")
+find_package(SDL3 REQUIRED CONFIG REQUIRED COMPONENTS SDL3)
+find_package(SDL3 REQUIRED CONFIG COMPONENTS SDL3main)
+set(imgui_platform ${IMGUI_DIR}/backends/imgui_impl_sdl3.cpp ${IMGUI_DIR}/backends/imgui_impl_sdlrenderer3.cpp)
+if(TARGET SDL3::SDL3main)
+set(imgui_libraries SDL3::SDL3 SDL3::SDL3main)
+else()
+set(imgui_libraries SDL3::SDL3)
+endif()
+else()
+find_package(glfw3 3.0 REQUIRED)
+set(imgui_platform ${IMGUI_DIR}/backends/imgui_impl_glfw.cpp)
+set(imgui_libraries glfw)
+endif()
+add_executable(client_gui src/client_gui.cpp ${imgui_src} ${imgui_platform})
+target_include_directories(client_gui PRIVATE
+	${CMAKE_SOURCE_DIR}/imgui/
+	${CMAKE_SOURCE_DIR}/imgui/backends
+	${SDL2_INCLUDE_DIR} ${SDL2_INCLUDE_DIRS})
+target_link_libraries(client_gui PRIVATE ${imgui_libraries})
+target_compile_definitions(client_gui PRIVATE -DUSE_SDL=${USE_SDL})
+endif()
+
 
 add_library(${library_name} SHARED ${layer_src} ${CMAKE_SOURCE_DIR}/README.md)
 target_include_directories(${library_name} PRIVATE
