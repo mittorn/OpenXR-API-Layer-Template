@@ -69,6 +69,7 @@ target_include_directories(${library_name} PRIVATE
 	${CMAKE_SOURCE_DIR}/OpenXR-SDK/include)
 
 add_executable(client_simple src/client_simple.cpp)
+add_executable(ipc_server src/ipc_server.cpp)
 
 add_custom_target(install_manifest
 	COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/src/manifest.json ${layer_directory})
