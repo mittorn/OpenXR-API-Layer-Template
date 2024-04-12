@@ -40,6 +40,8 @@ int Send(int fd, const T &data, unsigned char target = 0xF, pid_t targetPid = 0)
 
 int main(int argc, char **argv)
 {
+	if(argc < 2)
+		return 0;
 	int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	sockaddr_in addr;
 	addr.sin_family = AF_INET;

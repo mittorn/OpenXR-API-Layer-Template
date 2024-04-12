@@ -166,9 +166,17 @@ struct EventPoller
 	}
 	void Stop()
 	{
+		if(fd >= 0)
+			close(fd);
+		if(pipe_fd >= 0)
+			close(pipe_fd);
 		Running = false;
 		SyncBarrier();
 		pollerThread.RequestStop();
+	}
+	~EventPoller()
+	{
+		Stop();
 	}
 };
 
