@@ -1,6 +1,7 @@
 #include "imgui_impl_opengl2.h"
 #include <GL/gl.h>
 #include "layer_events.h"
+
 #if USE_SDL == 2
 #include "SDL.h"
 #include "imgui_impl_sdl2.h"
@@ -24,7 +25,7 @@ void *DYN_GL_GetProcAddress(const char *proc)
 	return SDL_GL_GetProcAddress(proc);
 }
 
-bool Platform_Init( const char *title, int width, int height )
+bool Platform_Init( const char *title, int width, int height, bool preferSoftware )
 {
 	// Setup SDL
 	if (SDL_Init(SDL_INIT_VIDEO) != 0)
@@ -38,12 +39,6 @@ bool Platform_Init( const char *title, int width, int height )
 	SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
 #endif
 
-	// Setup window
-	SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-	SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16);
-	SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 1);
-	SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
 	SDL_WindowFlags window_flags = (SDL_WindowFlags)(SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
 	gPlatformState.window = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width, height, window_flags);
 	if (gPlatformState.window == nullptr)
@@ -51,13 +46,70 @@ bool Platform_Init( const char *title, int width, int height )
 		Log("Error: SDL_CreateWindow(): %s\n", SDL_GetError());
 		return false;
 	}
-	gPlatformState.renderer = nullptr;//SDL_CreateRenderer(gPlatformState.window, -1, SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED);
+	static bool bErrored = false;
+	bool bIsX11 = !strcmp(SDL_GetCurrentVideoDriver(), "x11");
+	// SDL does not handle X11 errors, so app crashes if GL renderer unavailiable
+	if(!strcmp(SDL_GetCurrentVideoDriver(), "x11"))
+	{
+		// anyway, 2d rendering in software and uploading to GL is slower than direct x11 render
+		SDL_SetHint("SDL_FRAMEBUFFER_ACCELERATION", "software");
+		void (*x_error_handler)(void *d, void *e) = [](void *d, void *e) -> void
+		{
+			Log("X11 Error!\n");
+			bErrored = true;
+		};
+		void *ptr = SDL_LoadObject("libX11.so");
+		if(ptr)
+		{
+			int (*pXSetErrorHandler)(void (*handler)(void *d, void *e));
+			*(void**)&pXSetErrorHandler = SDL_LoadFunction(ptr, "XSetErrorHandler");
+			if(pXSetErrorHandler)
+				pXSetErrorHandler(x_error_handler);
+		}
+	}
+	int renderer_index = -1;
+	unsigned int flags = SDL_RENDERER_PRESENTVSYNC | SDL_RENDERER_ACCELERATED;
+
+	// OpenGL implementations are bloated
+	// Even with LIBGL_ALWAYS_INDIRECT or something it loads llvm, libdrm_* for all known and unknown gpus, etc..
+	// try set SDL not even try to load glX, EGL
+	// todo: SDL3 has vulkan renderer, which may get much less overhead
+	if(preferSoftware)
+	{
+		// force only software renderer.
+		// if it's unavailiable, will fallback to gl1 anyway
+		// todo: what about GLES-only systems? Local GL implementation may work on ES1
+		// GLES2 SDL_Rendererer is known to be the slowest
+		SDL_SetHint("SDL_FRAMEBUFFER_ACCELERATION", "software");
+		SDL_SetHint("SDL_RENDER_DRIVER", "software");
+		int count = SDL_GetNumRenderDrivers();
+		for(int i = 0; i < count; i++)
+		{
+			SDL_RendererInfo info;
+			SDL_GetRenderDriverInfo(i, &info);
+			if(info.flags & SDL_RENDERER_SOFTWARE)
+			{
+				renderer_index = i;
+				flags &= ~SDL_RENDERER_ACCELERATED;
+				flags |= SDL_RENDERER_SOFTWARE;
+				break;
+			}
+		}
+	}
+
+	gPlatformState.renderer = SDL_CreateRenderer(gPlatformState.window, renderer_index, flags);
+
 	if (gPlatformState.renderer == nullptr)
 	{
 		Log("Error creating SDL_Renderer!");
 		gPlatformState.useGL = true;
 		SDL_DestroyWindow(gPlatformState.window);
 		window_flags = (SDL_WindowFlags) (window_flags | SDL_WINDOW_OPENGL);
+		SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+		SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16);
+		SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 1);
+			SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
 		gPlatformState.window = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, width, height, window_flags);
 		gPlatformState.context = SDL_GL_CreateContext(gPlatformState.window);
 		SDL_GL_MakeCurrent(gPlatformState.window, gPlatformState.context);
@@ -72,6 +124,10 @@ bool Platform_Init( const char *title, int width, int height )
 	}
 	else
 	{
+		if(!preferSoftware && bErrored)
+			Log("Warning: SDL_Renderer errored\n"
+				"Try setting SDL_RENDER_DRIVER=software and SDL_FRAMEBUFFER_ACCELERATION=software if have some rendering issues!\n");
+
 		ImGui_ImplSDL2_InitForSDLRenderer(gPlatformState.window, gPlatformState.renderer);
 		ImGui_ImplSDLRenderer2_Init(gPlatformState.renderer);
 	}
@@ -87,16 +143,19 @@ void Platform_NewFrame()
 	ImGui_ImplSDL2_NewFrame();
 }
 
-bool Platform_ProcessEvents()
+bool Platform_ProcessEvents(bool &hasEvents)
 {
 	SDL_Event event;
+	hasEvents = false;
 	while (SDL_PollEvent(&event))
 	{
+		hasEvents = true;
 		ImGui_ImplSDL2_ProcessEvent(&event);
 		if (event.type == SDL_QUIT)
 			return false;
 		if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_CLOSE && event.window.windowID == SDL_GetWindowID(gPlatformState.window))
 			return false;
+		hasEvents = true;
 	}
 	return true;
 }
@@ -143,6 +202,25 @@ void Platform_Shutdown()
 #else
 #error "Not implemented yet"
 #endif
+#define SLEEP_ACTIVE 16666666
+#define SLEEP_SUBACTIVE 2500000
+#define SLEEP_IDLE  100000000
+constexpr static long long sleepTimes[4]
+{
+	50000000,
+	16666666,
+	16666666,
+	10000000,
+};
+void FrameControl(unsigned int requestFrames)
+{
+	static unsigned long long lastTime;
+	unsigned long long time = GetTimeU64();
+	long long timeDiff = sleepTimes[requestFrames] - (time - lastTime);
+	if(timeDiff > 5000000)
+		usleep(timeDiff / 1000);
+	lastTime = time;
+}
 
 int main(int argc, char **argv)
 {
@@ -150,19 +228,26 @@ int main(int argc, char **argv)
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	ImGuiIO& io = ImGui::GetIO(); (void)io;
-	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
-	io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+	io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;      // Enable Gamepad Controls
 
 	// Setup Dear ImGui style
 	ImGui::StyleColorsDark();
-	if(!Platform_Init("Layer GUI", 1024, 768))
+	if(!Platform_Init("Layer GUI", 1024, 768, false))
 		return 1;
 	bool done = false;
 	bool show_demo_window = true;
+	unsigned int requestFrames = 3;
 	while(!done)
 	{
-
-		done = !Platform_ProcessEvents();
+		bool hasEvents;
+		done = !Platform_ProcessEvents(hasEvents);
+		if(hasEvents)
+			requestFrames = 3;
+		if(!requestFrames)
+		{
+			FrameControl(requestFrames);
+			continue;
+		}
 		Platform_NewFrame();
 		ImGui::NewFrame();
 		if (show_demo_window)
@@ -170,6 +255,8 @@ int main(int argc, char **argv)
 		// Rendering
 		ImGui::Render();
 		Platform_Present(io);
+		FrameControl(requestFrames);
+		requestFrames--;
 	}
 	Platform_Shutdown();
 }

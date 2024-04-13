@@ -355,4 +355,15 @@ static void HandlePacket(const Handler &h, const EventPacket &p)
 	HandlePacketImpl<Handler, AppReg, AppVar, AppSession, AppAction, AppActionSet, AppBinding, AppSource, AppRPN, AppActionMap, AppCustomAction, DiagMsg, ClientReg>(h, p);
 }
 
+static unsigned long long GetTimeU64()
+{
+	static uint64_t startTime = 0;
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	if(!startTime)
+		startTime = ts.tv_sec;
+	ts.tv_sec -= startTime;
+	return ts.tv_sec*1e9 + ts.tv_nsec;
+}
+
 #endif // LAYER_EVENTS_H
