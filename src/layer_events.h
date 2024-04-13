@@ -357,7 +357,7 @@ static void HandlePacket(const Handler &h, const EventPacket &p)
 
 static unsigned long long GetTimeU64()
 {
-	static uint64_t startTime = 0;
+	static unsigned long long startTime = 0;
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	if(!startTime)
