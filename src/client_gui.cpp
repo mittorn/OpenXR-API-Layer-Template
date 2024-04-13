@@ -237,26 +237,35 @@ int main(int argc, char **argv)
 	bool done = false;
 	bool show_demo_window = true;
 	unsigned int requestFrames = 3;
+	bool frameSkipped = false;
 	while(!done)
 	{
 		bool hasEvents;
 		done = !Platform_ProcessEvents(hasEvents);
 		if(hasEvents)
 			requestFrames = 3;
-		if(!requestFrames)
+		if(requestFrames < 2)
 		{
 			FrameControl(requestFrames);
+			if(requestFrames)
+				requestFrames--;
+			frameSkipped = true;
 			continue;
 		}
 		Platform_NewFrame();
 		ImGui::NewFrame();
 		if (show_demo_window)
 			ImGui::ShowDemoWindow(&show_demo_window);
-		// Rendering
+
 		ImGui::Render();
-		Platform_Present(io);
-		FrameControl(requestFrames);
-		requestFrames--;
+		if(!frameSkipped)
+		{
+			Platform_Present(io);
+			FrameControl(requestFrames);
+			requestFrames--;
+		}
+
+		frameSkipped = false;
 	}
 	Platform_Shutdown();
 }
