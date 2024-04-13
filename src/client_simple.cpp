@@ -7,10 +7,12 @@
 struct EventDumper
 {
 	const char *tname;
+	void Begin(){}
 	void Dump(const SubStr &name, const SubStr &val)
 	{
 		Log("received %s: %s %s\n", tname, name, val);
 	}
+	void End(){}
 };
 
 

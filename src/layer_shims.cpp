@@ -27,10 +27,12 @@
 
 struct EventDumper
 {
+	void Begin(){}
 	void Dump(const SubStr &name, const SubStr &val)
 	{
 		Log("send %s %s\n", name, val);
 	}
+	void End(){}
 };
 
 struct EventPoller
