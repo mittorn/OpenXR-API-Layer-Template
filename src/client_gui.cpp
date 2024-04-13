@@ -1,3 +1,5 @@
+#include <arpa/inet.h>
+#include <sys/socket.h>
 #include "imgui_impl_opengl2.h"
 #include <GL/gl.h>
 #include "layer_events.h"
@@ -212,13 +214,13 @@ constexpr static long long sleepTimes[4]
 	16666666,
 	10000000,
 };
-
-struct AppConsole
+static void RunCommand(const Command &c);
+static struct AppConsole
 {
 	char                  InputBuf[256];
 	int mBufLen;
 	ImVector<SubStr>       Items;
-	ImVector<SubStr> Commands;
+	SubStr InternalCommands[3] ={"help", "history", "clear"};
 	ImVector<SubStr>       History;
 	int                   HistoryPos;    // -1: new line, 0..History.Size-1 browsing history.
 	ImGuiTextFilter       Filter;
@@ -230,10 +232,6 @@ struct AppConsole
 		ClearLog();
 		memset(InputBuf, 0, sizeof(InputBuf));
 		HistoryPos = -1;
-
-		Commands.push_back("help");
-		Commands.push_back("history");
-		Commands.push_back("clear");
 		AutoScroll = true;
 		ScrollToBottom = false;
 		AddLog("Welcome to Dear ImGui!");
@@ -436,9 +434,12 @@ struct AppConsole
 		}
 		else if (command_line.Equals("help"))
 		{
-			AddLog("Commands:");
-			for (int i = 0; i < Commands.Size; i++)
-				AddLog("- %s", Commands[i]);
+			AddLog("Internal Commands:");
+			for (int i = 0; i < IM_ARRAYSIZE(InternalCommands); i++)
+				AddLog("- %s", InternalCommands[i]);
+			AddLog("Client Commands:");
+			for (int i = 1; i < IM_ARRAYSIZE(gCommands); i++)
+				AddLog("- %s <%s>", gCommands[i].name, gCommands[i].sign);
 		}
 		else if (command_line.Equals("history"))
 		{
@@ -448,7 +449,11 @@ struct AppConsole
 		}
 		else
 		{
-			AddLog("Unknown command: '%s'\n", command_line);
+			Command c = Command(command_line);
+			if(c.ctype != EVENT_POLL_NULL)
+				RunCommand(c);
+			else
+				AddLog("Unknown command: '%s'\n", command_line);
 		}
 
 		// On command input, we scroll to bottom even if AutoScroll==false
@@ -464,7 +469,6 @@ struct AppConsole
 
 	int     TextEditCallback(ImGuiInputTextCallbackData* data)
 	{
-		mBufLen = data->BufTextLen;
 		//AddLog("cursor: %d, selection: %d-%d", data->CursorPos, data->SelectionStart, data->SelectionEnd);
 		switch (data->EventFlag)
 		{
@@ -486,9 +490,12 @@ struct AppConsole
 				// Build a list of candidates
 				ImVector<SubStr> candidates;
 				SubStr word = SubStr{word_start, word_end};
-				for (int i = 0; i < Commands.Size; i++)
-					if(Commands[i].StartsWith(word))
-						candidates.push_back(Commands[i]);
+				for (int i = 0; i < IM_ARRAYSIZE(gCommands); i++)
+					if(gCommands[i].name.StartsWith(word))
+						candidates.push_back(gCommands[i].name);
+				for (int i = 1; i < IM_ARRAYSIZE(InternalCommands); i++)
+					if(InternalCommands[i].StartsWith(word))
+						candidates.push_back(InternalCommands[i]);
 
 				if (candidates.Size == 0)
 				{
@@ -562,18 +569,92 @@ struct AppConsole
 				}
 			}
 		}
+
+		mBufLen = data->BufTextLen;
 		return 0;
+	}
+} gConsole;
+
+struct EventDumper
+{
+	const char *tname;
+	void Dump(const SubStr &name, const SubStr &val)
+	{
+		gConsole.AddLog("received %s: %s %s\n", tname, name, val);
 	}
 };
 
+
+struct HandleConsole
+{
+	template <typename T>
+	void Handle(const T &packet) const
+	{
+		EventDumper d{TypeName<T>()};
+		DumpNamedStruct(d, &packet);
+	}
+};
+
+
+static struct Client
+{
+	int fd;
+	bool Start(int port)
+	{
+		fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+		sockaddr_in addr;
+		addr.sin_family = AF_INET;
+		addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+		addr.sin_port = htons(port);
+		connect(fd, (sockaddr*)&addr, sizeof(addr));
+		ClientReg reg = {true};
+		Send(reg);
+		return true;
+	}
+	template <typename T>
+	int Send(const T &data, unsigned char target = 0xF, pid_t targetPid = 0)
+	{
+		EventPacket p;
+		p.head.sourcePid = getpid();
+		SubStr("client_simple").CopyTo(p.head.displayName);
+		p.head.target = target;
+		p.head.targetPid = targetPid;
+		p.head.type = T::type;
+		memcpy(&p.data, &data, sizeof(data));
+		return send(fd,&p, ((char*)&p.data - (char*)&p) + sizeof(data), 0);
+	}
+	void RunFrame(unsigned int time)
+	{
+		EventPacket p;
+		struct timeval tv;
+		fd_set rfds;
+		tv.tv_sec = 0;
+		tv.tv_usec = time;
+		FD_ZERO( &rfds );
+		FD_SET(fd, &rfds);
+		if( select( fd + 1, &rfds, NULL, NULL,&tv ) > 0)
+		{
+			if(!(FD_ISSET(fd,&rfds) && (recv(fd, &p, sizeof(p), MSG_DONTWAIT) >= 0)))
+				return;
+			HandleConsole h;
+			HandlePacket(h, p);
+		}
+	}
+} gClient;
+
+static void RunCommand(const Command &c)
+{
+	gClient.Send(c,TARGET_APP, 0);
+}
 
 void FrameControl(unsigned int requestFrames)
 {
 	static unsigned long long lastTime;
 	unsigned long long time = GetTimeU64();
 	long long timeDiff = sleepTimes[requestFrames] - (time - lastTime);
-	if(timeDiff > 5000000)
-		usleep(timeDiff / 1000);
+	if(timeDiff <= 5000000)
+		timeDiff = 0;
+	gClient.RunFrame(timeDiff / 1000);
 	lastTime = time;
 }
 
@@ -581,6 +662,9 @@ void FrameControl(unsigned int requestFrames)
 
 int main(int argc, char **argv)
 {
+	if(argc < 2)
+		return 0;
+	gClient.Start(atoi(argv[1]));
 	// Setup Dear ImGui context
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
@@ -596,7 +680,7 @@ int main(int argc, char **argv)
 	unsigned int requestFrames = 3;
 	bool frameSkipped = false;
 	bool showAppConsole = true;
-	AppConsole console;
+
 	while(!done)
 	{
 		bool hasEvents;
@@ -616,7 +700,7 @@ int main(int argc, char **argv)
 		if (show_demo_window)
 			ImGui::ShowDemoWindow(&show_demo_window);
 		if(showAppConsole)
-			console.Draw("Console", &showAppConsole);
+			gConsole.Draw("Console", &showAppConsole);
 
 		ImGui::Render();
 		if(!frameSkipped)
