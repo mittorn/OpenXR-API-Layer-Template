@@ -582,17 +582,49 @@ static struct AppConsole
 } gConsole;
 
 
+struct AppActionState
+{
+	AppAction mState;
+	HashMap<int, AppBinding> bindings;
+};
+
+struct AppActionSetState
+{
+	AppActionSet mState;
+	HashMap<SubStr,AppActionState> mActions;
+};
+
+
+struct AppSessionState
+{
+	AppSession mState;
+	HashMap<SubStr,AppActionSetState> mActionsSets;
+	bool show;
+	char mSessionName[32];
+	void SetName(int pid, unsigned long long handle)
+	{
+		if(mSessionName[0])
+			return;
+		SBPrint(mSessionName, "Session %x (%d)", handle, pid);
+		show = true;
+	}
+};
+
 struct AppState
 {
 	AppConsole mConsole;
 	int pid;
 	AppReg mReg;
-	HashMap<unsigned long long, AppSession> mSessions;
+	HashMap<unsigned long long, AppSessionState> mSessions;
 	char mAppName[64];
 
 	void SetName(const char *name)
 	{
-		SBPrint(mConsole.mWindowName, "%s (%d) - Console###CON_%d", name, pid, pid);
+		if(!mConsole.mWindowName[0])
+		{
+			SBPrint(mConsole.mWindowName, "%s (%d) - Console###CON_%d", name, pid, pid);
+			mConsole.show = true;
+		}
 		SBPrint(mAppName, "%s (%d)###APP_%d", name, pid, pid);
 
 		mConsole.mPid = pid;
@@ -608,7 +640,6 @@ struct EventDumper
 	void Begin(){}
 	void Dump(const SubStr &name, const SubStr &val)
 	{
-		console.show = true;
 		console.AddLog("received %s: %s %s\n", tname, name, val);
 	}
 	void End(){}
@@ -629,12 +660,29 @@ struct HandleConsole
 
 struct HandleApp
 {
+	int pid;
 	AppState &state;
 	template <typename T>
 	void Handle(const T &packet) const{}
 	void Handle(const AppSession &session) const
 	{
-		state.mSessions[session.handle] = session;
+		state.mSessions[session.handle].mState = session;
+		state.mSessions[session.handle].SetName(pid, session.handle);
+	}
+	void Handle(const AppActionSet &set) const
+	{
+		state.mSessions[set.session.val].mActionsSets[SubStrB(set.setName.val)].mState = set;
+		state.mSessions[set.session.val].SetName(pid, set.session.val);
+	}
+	void Handle(const AppAction &act) const
+	{
+		state.mSessions[act.session.val].mActionsSets[SubStrB(act.setName.val)].mActions[SubStrB(act.actName.val)].mState = act;
+		state.mSessions[act.session.val].SetName(pid, act.session.val);
+	}
+	void Handle(const AppBinding &act) const
+	{
+		state.mSessions[act.session.val].mActionsSets[SubStrB(act.setName.val)].mActions[SubStrB(act.actName.val)].bindings[act.index] = act;
+		state.mSessions[act.session.val].SetName(pid, act.session.val);
 	}
 };
 
@@ -715,7 +763,7 @@ static struct Client
 			HandlePacket(h, p);
 			if(s)
 			{
-				HandleApp a{*s};
+				HandleApp a{p.head.sourcePid,*s};
 				HandlePacket(a, p);
 			}
 		}
@@ -749,6 +797,62 @@ void FrameControl(unsigned int requestFrames)
 	lastTime = time;
 }
 
+void DrawActionSetTab(AppSessionState &s)
+{
+	HASHMAP_FOREACH(s.mActionsSets, as)
+	{
+		ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+		if(ImGui::CollapsingHeader(as->k.begin))
+		{
+			ImGui::PushID(as->k.begin);
+			ImGuiDumper d{"Action set info"};
+			DumpNamedStruct(d, &as->v.mState);
+			if(ImGui::TreeNode("Actions"))
+			{
+				HASHMAP_FOREACH(as->v.mActions, ac)
+				{
+					if(ImGui::TreeNode(ac->k.begin))
+					{
+						ImGuiDumper d{"Action info"};
+						DumpNamedStruct(d, &as->v.mState);
+						if(ImGui::TreeNode("Bindings"))
+						{
+							HASHMAP_FOREACH(ac->v.bindings, bnd)
+							{
+								d.tname = "Binding";
+								ImGui::PushID(bnd->k);
+								ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+								DumpNamedStruct(d, &bnd->v);
+								ImGui::PopID();
+							}
+							ImGui::TreePop();
+						}
+
+						ImGui::TreePop();
+					}
+				}
+				ImGui::TreePop();
+			}
+			ImGui::PopID();
+		}
+	}
+}
+
+
+void DrawSessionWindow(AppSessionState &s)
+{
+	ImGui::Begin( s.mSessionName, &s.show );
+	if(ImGui::BeginTabBar("##tabs"))
+	{
+		if(ImGui::BeginTabItem("Action sets"))
+		{
+			DrawActionSetTab(s);
+			ImGui::EndTabItem();
+		}
+		ImGui::EndTabBar();
+	}
+	ImGui::End();
+}
 
 
 int main(int argc, char **argv)
@@ -812,10 +916,15 @@ int main(int argc, char **argv)
 					DumpNamedStruct(d, &node->v.mReg);
 					HASHMAP_FOREACH(node->v.mSessions, ses)
 					{
-						char sessionName[32];
-						SBPrint(sessionName, "Session %x", ses->v.handle.val);
-						d.tname = sessionName;
-						DumpNamedStruct(d, &ses->v);
+
+						ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+						if(ImGui::TreeNode(ses->v.mSessionName))
+						{
+							d.tname = "Session state";
+							DumpNamedStruct(d, &ses->v.mState);
+							ImGui::Checkbox("Show session window", &ses->v.show);
+							ImGui::TreePop();
+						}
 					}
 					ImGui::TreePop();
 				}
@@ -828,6 +937,9 @@ int main(int argc, char **argv)
 		{
 			if(node->v.mConsole.show)
 				node->v.mConsole.Draw();
+			HASHMAP_FOREACH(node->v.mSessions, ses)
+				if(ses->v.show)
+					DrawSessionWindow(ses->v);
 		}
 
 		ImGui::Render();

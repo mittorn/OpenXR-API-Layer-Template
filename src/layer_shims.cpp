@@ -1258,7 +1258,7 @@ struct Layer
 		{
 		case EVENT_POLL_DUMP_APP_BINDINGS:
 			for(int i = 0; i < w.mActionSetsCount; i++)
-				DumpActionSet(mActiveSession, gActionSetInfos[w.mActionSets[i]]);
+				DumpActionSet(mActiveSession, gActionSetInfos[w.mActionSets[i]], w.mActionSets[i]);
 			break;
 		case EVENT_POLL_RELOAD_CONFIG:
 				config.~Config();
@@ -1299,7 +1299,7 @@ struct Layer
 			mTriggerInteractionProfileChangedOld = false;
 			break;
 		case EVENT_POLL_DUMP_LAYER_BINDINGS:
-			DumpActionSet(w.mSession, mLayerActionSet);
+			DumpActionSet(w.mSession, mLayerActionSet, mhLayerActionSet);
 			break;
 		case EVENT_POLL_MAP_DIRECT_SOURCE:
 			{
@@ -1435,12 +1435,27 @@ struct Layer
 
 		return ret;
 	}
-	void DumpActionSet(XrSession session, ActionSet &seti)
+	void DumpActionSet(XrSession session, ActionSet &seti, XrActionSet handle)
 	{
+		AppActionSet setsendinfo;
+		SubStrB(seti.info.actionSetName).CopyTo(setsendinfo.setName.val);
+		SubStrB(seti.info.localizedActionSetName).CopyTo(setsendinfo.description.val);
+		setsendinfo.session.val = (unsigned long long)session;
+		setsendinfo.handle.val = (unsigned long long)handle;
+		poller.Send(setsendinfo, TARGET_CLI|TARGET_GUI);
 		for(int i = 0; i < seti.mActions.count; i++ )
 		{
 			Action &as = seti.mActions[i];
 			XrActionCreateInfo &cinfo = as.info;
+			AppAction actsendinfo;
+			SubStrB(cinfo.actionName).CopyTo(actsendinfo.actName.val);
+			SubStrB(seti.info.actionSetName).CopyTo(actsendinfo.setName.val);
+			SubStrB(cinfo.localizedActionName).CopyTo(actsendinfo.description.val);
+			actsendinfo.session.val = (unsigned long long)session;
+			actsendinfo.handle.val = (unsigned long long)as.action;
+			actsendinfo.actionType = cinfo.actionType;
+			poller.Send(actsendinfo, TARGET_CLI|TARGET_GUI);
+
 			Log("info %p: %s %s\n", (void*)as.action, cinfo.actionName, cinfo.localizedActionName);
 			XrBoundSourcesForActionEnumerateInfo einfo = {XR_TYPE_BOUND_SOURCES_FOR_ACTION_ENUMERATE_INFO};
 			einfo.action = as.action;
@@ -1453,6 +1468,12 @@ struct Layer
 				nextLayer_xrEnumerateBoundSourcesForAction(session, &einfo, count, &count, paths);
 				for(int j = 0; j < count; j++)
 				{
+					AppBinding sendbnd;
+					sendbnd.index.val = j;
+					SubStrB(seti.info.actionSetName).CopyTo(sendbnd.setName.val);
+					SubStrB(cinfo.actionName).CopyTo(sendbnd.actName.val);
+					sendbnd.session.val = (unsigned long long)session;
+
 					uint32_t slen;
 					XrInputSourceLocalizedNameGetInfo linfo = {XR_TYPE_INPUT_SOURCE_LOCALIZED_NAME_GET_INFO};
 					linfo.sourcePath = paths[j];
@@ -1461,14 +1482,19 @@ struct Layer
 					{
 						char str[slen + 1];
 						nextLayer_xrGetInputSourceLocalizedName(session, &linfo, slen + 1, &slen, str);
-						Log("Description %s\n", (char*)str);
+						SubStr s = SubStr(str, slen);
+						s.CopyTo(sendbnd.description.val);
+						Log("Description %s\n", s);
 					}
 					nextLayer_xrPathToString(mInstance, paths[j], 0, &slen, NULL);
 					{
 						char str[slen + 1];
 						nextLayer_xrPathToString(mInstance, paths[j], slen + 1, &slen, str);
-						Log("raw_path %s\n", (char*)str);
+						SubStr s = SubStr(str, slen);
+						s.CopyTo(sendbnd.path.val);
+						Log("raw_path %s\n", s);
 					}
+					poller.Send(sendbnd,TARGET_CLI|TARGET_GUI);
 				}
 			}
 		}
@@ -1742,7 +1768,7 @@ struct Layer
 				w.mActionSets[i] = s;
 				ActionSet &seti = gActionSetInfos[s];
 				Log("Attached action set: %s %s\n", seti.info.actionSetName, seti.info.localizedActionSetName );
-				DumpActionSet(session,seti);
+				DumpActionSet(session,seti, s);
 			}
 			InitProfile(w, config.startupProfile.ptr);
 		}
@@ -1803,7 +1829,7 @@ struct Layer
 				{
 					ActionSet &seti = gActionSetInfos[w->mActionSets[i]];
 					Log("Session action set: %s %s\n", seti.info.actionSetName, seti.info.localizedActionSetName );
-					DumpActionSet(mActiveSession, seti);
+					DumpActionSet( mActiveSession, seti, w->mActionSets[i] );
 				}
 			}
 		}

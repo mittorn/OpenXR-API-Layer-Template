@@ -99,9 +99,9 @@ struct Command : CommandHeader
 			s0 = s, si = {nullptr, nullptr};
 		for(int i = 1; i < sizeof(gCommands) / sizeof(gCommands[0]);i++)
 		{
-			if(!s.Equals(gCommands[i].name))
+			if(!s0.Equals(gCommands[i].name))
 				continue;
-			for(int j = 0; j < gCommands[j].sign.Len();i++)
+			for(int j = 0; j < gCommands[i].sign.Len();j++)
 			{
 				if(!si.begin)
 					return;
@@ -206,8 +206,11 @@ struct AppAction
 	constexpr static EventType type = EVENT_APP_ACTION;
 	Field(unsigned long long,handle);
 	Field(unsigned long long,session);
+	Field(int, actionType);
 	StringField(setName,32);
 	StringField(actName,32);
+	StringField(description,32);
+	// todo: subactions info
 };
 
 struct AppActionSet
@@ -221,9 +224,12 @@ struct AppActionSet
 struct AppBinding
 {
 	constexpr static EventType type = EVENT_APP_BINDING;
-	Field(unsigned long long,handle);
-	StringField(path,32);
-	StringField(description,32);
+	Field(int, index);
+	StringField(actName, 32);
+	StringField(setName,32);
+	Field(unsigned long long,session);
+	StringField(path,64);
+	StringField(description,64);
 };
 struct AppSource
 {
