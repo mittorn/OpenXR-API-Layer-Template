@@ -1195,16 +1195,6 @@ struct Layer
 		}
 		return nextLayer_xrGetActionStateVector2f(session, getInfo, state);
 	}
-	static unsigned long long GetTimeU64()
-	{
-		static uint64_t startTime = 0;
-		struct timespec ts;
-		clock_gettime(CLOCK_MONOTONIC, &ts);
-		if(!startTime)
-			startTime = ts.tv_sec;
-		ts.tv_sec -= startTime;
-		return ts.tv_sec*1e9 + ts.tv_nsec;
-	}
 
 	XrResult thisLayer_xrWaitFrame(XrSession session, const XrFrameWaitInfo *frameWaitInfo, XrFrameState *frameState)
 	{
