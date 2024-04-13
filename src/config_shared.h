@@ -461,10 +461,12 @@ static void LoadConfig(Config *c)
 
 struct ConfigDumper
 {
+	void Begin(){}
 	void Dump(const SubStr &a, const SubStr &b)
 	{
 		Log("%s %s\n", a, b);
 	}
+	void End(){}
 };
 
 static void DumpConfig(Config &c)

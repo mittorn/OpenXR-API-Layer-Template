@@ -204,16 +204,14 @@ void Platform_Shutdown()
 #else
 #error "Not implemented yet"
 #endif
-#define SLEEP_ACTIVE 16666666
-#define SLEEP_SUBACTIVE 2500000
-#define SLEEP_IDLE  100000000
-constexpr static long long sleepTimes[4]
-{
-	50000000,
-	16666666,
-	16666666,
-	10000000,
-};
+
+namespace ImGui {
+	void TextUnformatted(const SubStr &s)
+	{
+		return TextUnformatted(s.begin, s.end);
+	}
+}
+
 static void RunCommand(int pid, const Command &c);
 static struct AppConsole
 {
@@ -589,10 +587,14 @@ struct AppState
 	AppConsole mConsole;
 	int pid;
 	AppReg mReg;
+	HashMap<unsigned long long, AppSession> mSessions;
+	char mAppName[64];
 
 	void SetName(const char *name)
 	{
 		SBPrint(mConsole.mWindowName, "%s (%d) - Console###CON_%d", name, pid, pid);
+		SBPrint(mAppName, "%s (%d)###APP_%d", name, pid, pid);
+
 		mConsole.mPid = pid;
 	}
 };
@@ -603,11 +605,13 @@ struct EventDumper
 {
 	AppConsole &console;
 	const char *tname;
+	void Begin(){}
 	void Dump(const SubStr &name, const SubStr &val)
 	{
 		console.show = true;
 		console.AddLog("received %s: %s %s\n", tname, name, val);
 	}
+	void End(){}
 };
 
 
@@ -622,6 +626,41 @@ struct HandleConsole
 	}
 };
 
+
+struct HandleApp
+{
+	AppState &state;
+	template <typename T>
+	void Handle(const T &packet) const{}
+	void Handle(const AppSession &session) const
+	{
+		state.mSessions[session.handle] = session;
+	}
+};
+
+
+struct ImGuiDumper
+{
+	const char *tname;
+	bool show;
+	void Begin()
+	{
+		show = ImGui::TreeNode(tname);
+	}
+	void Dump(const SubStr &name, const SubStr &val)
+	{
+		if(!show)
+			return;
+		ImGui::TextUnformatted(name);
+		ImGui::SameLine();
+		ImGui::TextUnformatted(val);
+	}
+	void End()
+	{
+		if(show)
+		ImGui::TreePop();
+	}
+};
 
 static struct Client
 {
@@ -671,8 +710,14 @@ static struct Client
 				if(!s.mReg.name.val[0] && p.data.appReg.name.val[0])
 					s.mReg = p.data.appReg;
 			}
-			HandleConsole h{gApps.GetPtr(p.head.sourcePid)};
+			AppState *s = gApps.GetPtr(p.head.sourcePid);
+			HandleConsole h{s};
 			HandlePacket(h, p);
+			if(s)
+			{
+				HandleApp a{*s};
+				HandlePacket(a, p);
+			}
 		}
 	}
 } gClient;
@@ -682,6 +727,17 @@ static void RunCommand(int pid, const Command &c)
 	gClient.Send(c,TARGET_APP, pid);
 }
 
+
+#define SLEEP_ACTIVE 16666666
+#define SLEEP_SUBACTIVE 2500000
+#define SLEEP_IDLE  100000000
+constexpr static long long sleepTimes[4]
+{
+	50000000,
+	16666666,
+	16666666,
+	10000000,
+};
 void FrameControl(unsigned int requestFrames)
 {
 	static unsigned long long lastTime;
@@ -711,7 +767,7 @@ int main(int argc, char **argv)
 	if(!Platform_Init("Layer GUI", 1024, 768, false))
 		return 1;
 	bool done = false;
-	bool show_demo_window = true;
+	bool show_demo_window = false;
 	unsigned int requestFrames = 3;
 	bool frameSkipped = false;
 	SubStr("Console").CopyTo(gConsole.mWindowName);
@@ -734,6 +790,38 @@ int main(int argc, char **argv)
 		ImGui::NewFrame();
 		if (show_demo_window)
 			ImGui::ShowDemoWindow(&show_demo_window);
+		ImGui::SetNextWindowSize(ImVec2(400,200), ImGuiCond_FirstUseEver);
+		ImGui::Begin("Client");
+		ImGui::Checkbox("Demo", &show_demo_window);
+		ImGui::Checkbox("Global console", &gConsole.show);
+		//bool showApps = true;
+		ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+		if(ImGui::CollapsingHeader("Apps"))
+		{
+			HASHMAP_FOREACH(gApps, node)
+			{
+				ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+				if(ImGui::TreeNode(node->v.mAppName))
+				{
+					ImGui::Checkbox("Console", &node->v.mConsole.show);
+					ImGui::TextUnformatted("Request dump:");
+					ImGui::Button("Session");ImGui::SameLine();
+					ImGui::Button("Variables");ImGui::SameLine();
+					ImGui::Button("Sources");
+					ImGuiDumper d{"Registration info"};
+					DumpNamedStruct(d, &node->v.mReg);
+					HASHMAP_FOREACH(node->v.mSessions, ses)
+					{
+						char sessionName[32];
+						SBPrint(sessionName, "Session %x", ses->v.handle.val);
+						d.tname = sessionName;
+						DumpNamedStruct(d, &ses->v);
+					}
+					ImGui::TreePop();
+				}
+			}
+		}
+		ImGui::End();
 		if(gConsole.show)
 			gConsole.Draw();
 		HASHMAP_FOREACH(gApps, node)

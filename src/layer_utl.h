@@ -71,10 +71,16 @@ struct Dumper
 	T& GetData(T* tempptr)
 	{
 		if(index == 0)
+		{
 			tmpbase = (char*)tempptr;
+			d.Begin();
+		}
 		return *(T*)(base + ((char*)tempptr - tmpbase));
 	}
-	void End(size_t sz){}
+	void End(size_t sz)
+	{
+		d.End();
+	}
 	DumperType &d;
 	Dumper(DumperType &d1) : d(d1){}
 };
