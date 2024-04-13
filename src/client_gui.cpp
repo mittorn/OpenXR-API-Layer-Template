@@ -214,9 +214,12 @@ constexpr static long long sleepTimes[4]
 	16666666,
 	10000000,
 };
-static void RunCommand(const Command &c);
+static void RunCommand(int pid, const Command &c);
 static struct AppConsole
 {
+	char mWindowName[64];
+	int mPid;
+	bool show;
 	char                  InputBuf[256];
 	int mBufLen;
 	ImVector<SubStr>       Items;
@@ -269,10 +272,15 @@ static struct AppConsole
 		Items.push_back(SubStr(fmt).StrDup());
 	}
 
-	void Draw(const char* title, bool* p_open)
+	void Draw()
 	{
+		if(!mWindowName[0])
+		{
+			show = false;
+			return;
+		}
 		ImGui::SetNextWindowSize(ImVec2(520, 600), ImGuiCond_FirstUseEver);
-		if (!ImGui::Begin(title, p_open))
+		if (!ImGui::Begin(mWindowName, &show))
 		{
 			ImGui::End();
 			return;
@@ -284,7 +292,7 @@ static struct AppConsole
 		if (ImGui::BeginPopupContextItem())
 		{
 			if (ImGui::MenuItem("Close Console"))
-				*p_open = false;
+				show = false;
 			ImGui::EndPopup();
 		}
 
@@ -451,7 +459,7 @@ static struct AppConsole
 		{
 			Command c = Command(command_line);
 			if(c.ctype != EVENT_POLL_NULL)
-				RunCommand(c);
+				RunCommand(mPid, c);
 			else
 				AddLog("Unknown command: '%s'\n", command_line);
 		}
@@ -575,22 +583,41 @@ static struct AppConsole
 	}
 } gConsole;
 
+
+struct AppState
+{
+	AppConsole mConsole;
+	int pid;
+	AppReg mReg;
+
+	void SetName(const char *name)
+	{
+		SBPrint(mConsole.mWindowName, "%s (%d) - Console###CON_%d", name, pid, pid);
+		mConsole.mPid = pid;
+	}
+};
+
+static HashMap<int, AppState> gApps;
+
 struct EventDumper
 {
+	AppConsole &console;
 	const char *tname;
 	void Dump(const SubStr &name, const SubStr &val)
 	{
-		gConsole.AddLog("received %s: %s %s\n", tname, name, val);
+		console.show = true;
+		console.AddLog("received %s: %s %s\n", tname, name, val);
 	}
 };
 
 
 struct HandleConsole
 {
+	AppState *state;
 	template <typename T>
 	void Handle(const T &packet) const
 	{
-		EventDumper d{TypeName<T>()};
+		EventDumper d{state? state->mConsole : gConsole,TypeName<T>()};
 		DumpNamedStruct(d, &packet);
 	}
 };
@@ -636,15 +663,23 @@ static struct Client
 		{
 			if(!(FD_ISSET(fd,&rfds) && (recv(fd, &p, sizeof(p), MSG_DONTWAIT) >= 0)))
 				return;
-			HandleConsole h;
+			if(p.head.type == EVENT_APP_REGISTER)
+			{
+				AppState &s = gApps[p.head.sourcePid];
+				s.pid = p.head.sourcePid;
+				s.SetName(p.head.displayName);
+				if(!s.mReg.name.val[0] && p.data.appReg.name.val[0])
+					s.mReg = p.data.appReg;
+			}
+			HandleConsole h{gApps.GetPtr(p.head.sourcePid)};
 			HandlePacket(h, p);
 		}
 	}
 } gClient;
 
-static void RunCommand(const Command &c)
+static void RunCommand(int pid, const Command &c)
 {
-	gClient.Send(c,TARGET_APP, 0);
+	gClient.Send(c,TARGET_APP, pid);
 }
 
 void FrameControl(unsigned int requestFrames)
@@ -679,7 +714,7 @@ int main(int argc, char **argv)
 	bool show_demo_window = true;
 	unsigned int requestFrames = 3;
 	bool frameSkipped = false;
-	bool showAppConsole = true;
+	SubStr("Console").CopyTo(gConsole.mWindowName);
 
 	while(!done)
 	{
@@ -699,8 +734,13 @@ int main(int argc, char **argv)
 		ImGui::NewFrame();
 		if (show_demo_window)
 			ImGui::ShowDemoWindow(&show_demo_window);
-		if(showAppConsole)
-			gConsole.Draw("Console", &showAppConsole);
+		if(gConsole.show)
+			gConsole.Draw();
+		HASHMAP_FOREACH(gApps, node)
+		{
+			if(node->v.mConsole.show)
+				node->v.mConsole.Draw();
+		}
 
 		ImGui::Render();
 		if(!frameSkipped)

@@ -146,8 +146,8 @@ struct Field_
 	{
 		return val;
 	}
-	Field_(const Field_ &other) = delete;
-	Field_& operator=(const Field_ &) = delete;
+	//Field_(const Field_ &other) = delete;
+	//Field_& operator=(const Field_ &) = delete;
 	Field_() = default;
 	Field_(const T &def):val(def){}
 	template <typename DumperType>
@@ -170,8 +170,8 @@ struct StringField_
 {
 	constexpr static const char *name = NAME;
 	char val[len];
-	StringField_(const StringField_ &other) = delete;
-	StringField_& operator=(const StringField_ &) = delete;
+	//StringField_(const StringField_ &other) = delete;
+	//StringField_& operator=(const StringField_ &) = delete;
 	StringField_() = default;
 	StringField_(const SubStr &def):val(){ def.CopyTo(val);}
 	template <typename DumperType>
