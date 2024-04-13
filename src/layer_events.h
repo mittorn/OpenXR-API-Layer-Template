@@ -40,6 +40,27 @@ enum CommandType{
 	EVENT_POLL_DUMP_LAYER_BINDINGS,
 };
 
+constexpr static struct CommandDef
+{
+	SubStr name;
+	SubStr sign;
+} gCommands[] =
+{
+	{"", ""},
+	{"triggerInteractionProfileChanged", ""},
+	{"reloadConfig", ""},
+	{"setExternalSource","sif"},
+	{"mapDirectSource","sis"},
+	{"mapAxis","sisi"},
+	{"mapAction","ssi"},
+	{"resetAction","s"},
+	{"setProfile","s"},
+	{"dumpAppBindings",""},
+	{"dumpLayerBindings",""},
+};
+
+
+
 #define MAX_CMDLEN 256
 
 struct CommandHeader
@@ -73,81 +94,31 @@ struct Command : CommandHeader
 	{
 		datasize = 0;
 		ctype = EVENT_POLL_NULL;
-		SubStr s1, s2; // todo: encode signature to string/array instead
-		if(!s.Split2(s1, s2, ' '))
-		s1 = s, s2 = "";
+		SubStr s0, si, sn; // todo: encode signature to string/array instead
+		if(!s.Split2(s0, si, ' '))
+			s0 = s, si = {nullptr, nullptr};
+		for(int i = 1; i < sizeof(gCommands) / sizeof(gCommands[0]);i++)
 		{
-			if(s1.Equals("triggerInteractionProfileChanged"))
-				ctype = EVENT_POLL_TRIGGER_INTERACTION_PROFILE_CHANGED;
-			else if(s1.Equals("reloadConfig"))
-				ctype = EVENT_POLL_RELOAD_CONFIG;
-			else if(s1.Equals("dumpAppBindings"))
-				ctype = EVENT_POLL_DUMP_APP_BINDINGS;
-			else if(s1.Equals("dumpLayerBindings"))
-				ctype = EVENT_POLL_DUMP_LAYER_BINDINGS;
-			else
+			if(!s.Equals(gCommands[i].name))
+				continue;
+			for(int j = 0; j < gCommands[j].sign.Len();i++)
 			{
-				if(!s2.Len())
+				if(!si.begin)
 					return;
-				if(s1.Equals("setExternalSource"))
-				{
-					SubStr s3, s4, s5, s6;
-					if(s2.Split2(s3, s4, ' ') && s4.Split2(s5, s6, ' '))
-					{
-						_AddStr(s3, 0);
-						args[1].i = atoi(s5.begin);
-						args[2].f = atof(s6.begin);
-						ctype = EVENT_POLL_SET_EXTERNAL_SOURCE;
-					}
-				}
-				else if(s1.Equals("mapDirectSource"))
-				{
-					SubStr s3, s4, s5, s6;
-					if(s2.Split2(s3, s4, ' ') && s4.Split2(s5, s6, ' '))
-					{
-						_AddStr(s3, 0);
-						args[1].i = atoi(s5.begin);
-						_AddStr(s6, 2);
-						ctype = EVENT_POLL_MAP_DIRECT_SOURCE;
-					}
-				}
-				else if(s1.Equals("mapAxis"))
-				{
-					SubStr s3, s4, s5, s6, s7, s8;
-					if(s2.Split2(s3, s4, ' ') && s4.Split2(s5, s6, ' ') && s6.Split2(s7, s8, ' '))
-					{
-						_AddStr(s3, 0);
-						args[1].i = atoi(s5.begin);
-						_AddStr(s7, 2);
-						args[3].i = atoi(s8.begin);
-						ctype = EVENT_POLL_MAP_AXIS;
-					}
-				}
-				else if(s1.Equals("resetAction"))
-				{
-					ctype = EVENT_POLL_RESET_ACTION;
-					_AddStr(s2, 0);
-				}
-				else if(s1.Equals("setProfile"))
-				{
-					ctype = EVENT_POLL_SET_PROFILE;
-					_AddStr(s2, 0);
-				}
-				else if(s1.Equals("mapAction"))
-				{
-					SubStr s3, s4, s5, s6;
-					if(s2.Split2(s3, s4, ' ') && s4.Split2(s5, s6, ' '))
-
-					{
-						_AddStr(s3, 0);
-						_AddStr(s5, 1);
-						args[2].i = atoi(s6.begin);
-						ctype = EVENT_POLL_MAP_ACTION;
-					}
-				}
+				if(!si.Split2(s0, sn, ' '))
+					s0 = si, sn = {nullptr, nullptr};
+				if(gCommands[j].sign.begin[j] == 's')
+					_AddStr(s0, j);
+				if(gCommands[j].sign.begin[j] == 'i')
+					args[j].i = atoi(s0.begin);
+				if(gCommands[j].sign.begin[j] == 'f')
+					args[j].i = atof(s0.begin);
+				si = s0;
 			}
+			ctype = (CommandType)i;
 		}
 	}
+
 	Command & operator = (const Command &other)
 	{
 		ctype = other.ctype;
