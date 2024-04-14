@@ -38,6 +38,8 @@ enum CommandType{
 	EVENT_POLL_SET_PROFILE,
 	EVENT_POLL_DUMP_APP_BINDINGS,
 	EVENT_POLL_DUMP_LAYER_BINDINGS,
+	EVENT_POLL_DUMP_SOURCES,
+	EVENT_POLL_DUMP_VARIABLES
 };
 
 constexpr static struct CommandDef
@@ -57,6 +59,8 @@ constexpr static struct CommandDef
 	{"setProfile","s"},
 	{"dumpAppBindings",""},
 	{"dumpLayerBindings",""},
+	{"dumpSources",""},
+	{"dumpVariables",""},
 };
 
 
@@ -239,6 +243,11 @@ struct AppSource
 	Field(int, index);
 	Field(float,x);
 	Field(float,y);
+	Field(unsigned long long, lastChangeTime);
+	Field(bool, changedSinceLastSync);
+	Field(bool, isActive);
+	Field(int, stype);
+
 };
 struct AppRPN
 {

@@ -1324,6 +1324,86 @@ struct Layer
 					AxisFromConfig(*a, cmd.args[1].i, cmd.Str(2), cmd.args[3].i, w);
 		}
 		break;
+		case EVENT_POLL_DUMP_SOURCES:
+		{
+			for(int i = 0; i < mpActiveSession->mLayerActionsBoolean.count; i++)
+			{
+				for(int hand = 0; hand < 2; hand++)
+				{
+					auto &src = mpActiveSession->mLayerActionsBoolean[i];
+					AppSource s;
+					s.session = (unsigned long long)mActiveSession;
+					SubStrB(src.info.actionName).CopyTo(s.name.val);
+					s.index = hand;
+					s.stype = SourceSection::action_bool;
+					s.x = src.typedState[hand].currentState;
+					s.y = 0;
+					s.lastChangeTime = src.typedState[hand].lastChangeTime;
+					s.isActive = src.typedState[hand].isActive;
+					s.changedSinceLastSync = src.typedState[hand].changedSinceLastSync;
+					poller.Send(s, TARGET_CLI|TARGET_GUI);
+				}
+			}
+			for(int i = 0; i < mpActiveSession->mLayerActionsFloat.count; i++)
+			{
+				for(int hand = 0; hand < 2; hand++)
+				{
+					auto &src = mpActiveSession->mLayerActionsFloat[i];
+					AppSource s;
+					s.session = (unsigned long long)mActiveSession;
+					SubStrB(src.info.actionName).CopyTo(s.name.val);
+					s.index = hand;
+					s.stype = SourceSection::action_float;
+					s.x = src.typedState[hand].currentState;
+					s.y = 0;
+					s.lastChangeTime = src.typedState[hand].lastChangeTime;
+					s.isActive = src.typedState[hand].isActive;
+					s.changedSinceLastSync = src.typedState[hand].changedSinceLastSync;
+					poller.Send(s, TARGET_CLI|TARGET_GUI);
+				}
+			}
+			for(int i = 0; i < mpActiveSession->mLayerActionsVec2.count; i++)
+			{
+				for(int hand = 0; hand < 2; hand++)
+				{
+					auto &src = mpActiveSession->mLayerActionsVec2[i];
+					AppSource s;
+					s.session = (unsigned long long)mActiveSession;
+					SubStrB(src.info.actionName).CopyTo(s.name.val);
+					s.index = hand;
+					s.stype = SourceSection::action_vector2;
+					s.x = src.typedState[hand].currentState.x;
+					s.y = src.typedState[hand].currentState.y;
+					s.lastChangeTime = src.typedState[hand].lastChangeTime;
+					s.isActive = src.typedState[hand].isActive;
+					s.changedSinceLastSync = src.typedState[hand].changedSinceLastSync;
+					poller.Send(s, TARGET_CLI|TARGET_GUI);
+				}
+			}
+			HASHMAP_FOREACH(mpActiveSession->mExternalSources, node)
+			{
+				AppSource s;
+				s.session = (unsigned long long)mActiveSession;
+				s.index = USER_PATH_COUNT;
+				s.stype = SourceSection::action_external;
+				node->k.CopyTo(s.name.val);
+				s.x = node->v[0];
+				s.y = node->v[1];
+				poller.Send(s, TARGET_CLI|TARGET_GUI);
+			}
+
+		}
+		break;
+		case EVENT_POLL_DUMP_VARIABLES:
+		{
+			HASHMAP_FOREACH(mRPNVariables, node)
+			{
+				AppVar s;
+				node->k.CopyTo(s.name.val);
+				s.value = node->v;
+				poller.Send(s, TARGET_CLI|TARGET_GUI);
+			}
+		}
 		default:
 			break;
 		}
@@ -1387,6 +1467,8 @@ struct Layer
 				c.mLastTrigger = mFrameStartTime;
 			}
 		}
+
+		// todo: hand mask
 		for(int i = 0; i < mpActiveSession->mLayerActionsBoolean.count; i++)
 		{
 			for(int hand = 0; hand < 2; hand++)
