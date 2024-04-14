@@ -401,7 +401,8 @@ static struct AppConsole
 		{
 			SubStr buf = SubStr(InputBuf, mBufLen);
 			char* s = InputBuf;
-			//Strtrim(s);
+			while(buf.end > buf.begin && (*(buf.end - 1) == ' ') )
+					buf.end--;
 			if (s[0])
 				ExecCommand(buf);
 			mBufLen = 0;
@@ -496,10 +497,10 @@ static struct AppConsole
 				// Build a list of candidates
 				ImVector<SubStr> candidates;
 				SubStr word = SubStr{word_start, word_end};
-				for (int i = 0; i < IM_ARRAYSIZE(gCommands); i++)
+				for (int i = 1; i < IM_ARRAYSIZE(gCommands); i++)
 					if(gCommands[i].name.StartsWith(word))
 						candidates.push_back(gCommands[i].name);
-				for (int i = 1; i < IM_ARRAYSIZE(InternalCommands); i++)
+				for (int i = 0; i < IM_ARRAYSIZE(InternalCommands); i++)
 					if(InternalCommands[i].StartsWith(word))
 						candidates.push_back(InternalCommands[i]);
 
@@ -582,18 +583,88 @@ static struct AppConsole
 } gConsole;
 
 
+template <typename Type, const auto &NAME, size_t nlen>
+struct StructField_ : Type
+{
+	constexpr static const char *name = NAME;
+	StructField_() = default;
+	StructField_(const Type &t){ *(Type*)this = t;}
+	template <typename DumperType>
+	StructField_(Dumper<DumperType> &l){
+		auto &vv = l.GetData(this);
+		DumperType d2 = l.d;
+		if( l.d.show)
+		{
+			d2.tname = name;
+			DumpNamedStruct(d2, (Type*)&vv);
+		}
+
+	}
+};
+
+#define StructField(Type, name) \
+constexpr static const char fld_name_##name[] = #name; \
+	StructField_<Type, fld_name_##name, sizeof(fld_name_##name) - 1> name
+
+
+#define HashMapField(Key, Value, name) \
+constexpr static const char fld_name_##name[] = #name; \
+	HashMapField_<Key, Value, fld_name_##name, sizeof(fld_name_##name) - 1> name
+
+void NameForKey(char (&keyname)[32], int key)
+{
+	SBPrint(keyname, "%x", key);
+}
+
+void NameForKey(char (&keyname)[32], const SubStr &key)
+{
+	SBPrint(keyname, "%s", key);
+}
+
+template <typename Key, typename Value, const auto &NAME, size_t nlen>
+struct HashMapField_ : HashMap<Key, Value>
+{
+	constexpr static const char *name = NAME;
+	HashMapField_() = default;
+	template <typename DumperType>
+	HashMapField_(Dumper<DumperType> &l){
+		auto &vv = l.GetData(this);
+		DumperType d2 = l.d;
+		d2.startOpen = false;
+
+		if(l.d.show)
+		{
+			d2.tname = name;
+			d2.Begin();
+			if(d2.show)
+			{
+				DumperType d3 = l.d;
+				HASHMAP_FOREACH(vv, node)
+				{
+					char keyname[32];
+					NameForKey(keyname,node->k);
+					d3.tname = keyname;
+
+					DumpNamedStruct(d3, &node->v);
+				}
+			}
+			d2.End();
+		}
+
+	}
+};
+
 struct AppActionState
 {
-	AppAction mState;
-	HashMap<int, AppBinding> bindings;
+	StructField(AppAction,mState);
+	HashMapField(int, AppBinding, bindings);
 };
 
 struct AppActionSetState
 {
-	AppActionSet mState;
-	HashMap<SubStr,AppActionState> mActions;
+	StructField(AppActionSet,mState);
+	HashMapField(SubStr,AppActionState,mActions);
 };
-
 
 struct AppSessionState
 {
@@ -687,7 +758,7 @@ struct HandleApp
 };
 
 
-struct ImGuiDumper
+struct ImGuiTreeDumper
 {
 	const char *tname;
 	bool show;
@@ -695,13 +766,14 @@ struct ImGuiDumper
 	{
 		show = ImGui::TreeNode(tname);
 	}
-	void Dump(const SubStr &name, const SubStr &val)
+	bool Dump(const SubStr &name, const SubStr &val)
 	{
 		if(!show)
-			return;
+			return false;
 		ImGui::TextUnformatted(name);
 		ImGui::SameLine();
 		ImGui::TextUnformatted(val);
+		return true;
 	}
 	void End()
 	{
@@ -709,6 +781,40 @@ struct ImGuiDumper
 		ImGui::TreePop();
 	}
 };
+
+struct ImGuiTableTreeDumper
+{
+	const char *tname;
+	bool show;
+	bool startOpen = false;
+	void Begin()
+	{
+		ImGui::TableNextRow();
+		ImGui::TableSetColumnIndex(1);
+		ImGui::TextUnformatted("<object>");
+		ImGui::TableSetColumnIndex(0);
+		if(startOpen)
+			ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+		show = ImGui::TreeNode(tname);
+	}
+	bool Dump(const SubStr &name, const SubStr &val)
+	{
+		if(!show)
+			return false;
+		ImGui::TableNextRow();
+		ImGui::TableSetColumnIndex(0);
+		ImGui::TreeNodeEx(name.begin, ImGuiTreeNodeFlags_SpanAllColumns | ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen | ImGuiTreeNodeFlags_Bullet);
+		ImGui::TableSetColumnIndex(1);
+		ImGui::TextUnformatted(val);
+		return true;
+	}
+	void End()
+	{
+		if(show)
+			ImGui::TreePop();
+	}
+};
+
 
 static struct Client
 {
@@ -805,33 +911,16 @@ void DrawActionSetTab(AppSessionState &s)
 		if(ImGui::CollapsingHeader(as->k.begin))
 		{
 			ImGui::PushID(as->k.begin);
-			ImGuiDumper d{"Action set info"};
-			DumpNamedStruct(d, &as->v.mState);
-			if(ImGui::TreeNode("Actions"))
+			if (ImGui::BeginTable("##split", 2, ImGuiTableFlags_BordersOuter| ImGuiTableFlags_RowBg))
 			{
-				HASHMAP_FOREACH(as->v.mActions, ac)
-				{
-					if(ImGui::TreeNode(ac->k.begin))
-					{
-						ImGuiDumper d{"Action info"};
-						DumpNamedStruct(d, &as->v.mState);
-						if(ImGui::TreeNode("Bindings"))
-						{
-							HASHMAP_FOREACH(ac->v.bindings, bnd)
-							{
-								d.tname = "Binding";
-								ImGui::PushID(bnd->k);
-								ImGui::SetNextItemOpen(true, ImGuiCond_Once);
-								DumpNamedStruct(d, &bnd->v);
-								ImGui::PopID();
-							}
-							ImGui::TreePop();
-						}
-
-						ImGui::TreePop();
-					}
-				}
-				ImGui::TreePop();
+				ImGui::TableSetupScrollFreeze(0, 1);
+				ImGui::TableSetupColumn("Object");
+				ImGui::TableSetupColumn("Contents");
+				ImGui::TableHeadersRow();
+				ImGuiTableTreeDumper d{"Action set info"};
+				d.startOpen = true;
+				DumpNamedStruct(d, &as->v);
+				ImGui::EndTable();
 			}
 			ImGui::PopID();
 		}
@@ -912,7 +1001,7 @@ int main(int argc, char **argv)
 					ImGui::Button("Session");ImGui::SameLine();
 					ImGui::Button("Variables");ImGui::SameLine();
 					ImGui::Button("Sources");
-					ImGuiDumper d{"Registration info"};
+					ImGuiTreeDumper d{"Registration info"};
 					DumpNamedStruct(d, &node->v.mReg);
 					HASHMAP_FOREACH(node->v.mSessions, ses)
 					{
