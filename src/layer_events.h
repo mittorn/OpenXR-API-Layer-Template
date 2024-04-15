@@ -39,7 +39,11 @@ enum CommandType{
 	EVENT_POLL_DUMP_APP_BINDINGS,
 	EVENT_POLL_DUMP_LAYER_BINDINGS,
 	EVENT_POLL_DUMP_SOURCES,
-	EVENT_POLL_DUMP_VARIABLES
+	EVENT_POLL_DUMP_VARIABLES,
+	EVENT_POLL_DUMP_ACTION_MAPS,
+	EVENT_POLL_DUMP_EXPRESSIONS,
+	EVENT_POLL_DUMP_CUSTOM_ACTIONS,
+	EVENT_POLL_DUMP_SESSION
 };
 
 constexpr static struct CommandDef
@@ -61,6 +65,10 @@ constexpr static struct CommandDef
 	{"dumpLayerBindings",""},
 	{"dumpSources",""},
 	{"dumpVariables",""},
+	{"dumpActionMaps",""},
+	{"dumpExpressions",""},
+	{"dumpCustomActions",""},
+	{"dumpSession",""},
 };
 
 
@@ -111,11 +119,11 @@ struct Command : CommandHeader
 					return;
 				if(!si.Split2(s0, sn, ' '))
 					s0 = si, sn = {nullptr, nullptr};
-				if(gCommands[j].sign.begin[j] == 's')
+				if(gCommands[i].sign.begin[j] == 's')
 					_AddStr(s0, j);
-				if(gCommands[j].sign.begin[j] == 'i')
+				if(gCommands[i].sign.begin[j] == 'i')
 					args[j].i = atoi(s0.begin);
-				if(gCommands[j].sign.begin[j] == 'f')
+				if(gCommands[i].sign.begin[j] == 'f')
 					args[j].i = atof(s0.begin);
 				si = s0;
 			}
@@ -254,30 +262,42 @@ struct AppRPN
 	constexpr static EventType type = EVENT_APP_RPN;
 	Field(unsigned long long,session);
 	StringField(source,64);
-	Field(unsigned char,context);
-	Field(int,index);
 	StringField(rpn,64);
 };
 struct AppActionMap
 {
 	constexpr static EventType type = EVENT_APP_ACTION_MAP;
 	Field(unsigned long long,session);
+	Field(unsigned long long,handle);
 	StringField(actName,32);
+	Field(unsigned char,hand);
 	Field(int,mapIndex);
-	Field(int,funcIndex);
-	Field(int,actionIndex);
-	Field(int,axisIndex);
-	Field(int,handIndex);
+	Field(unsigned char,handIndex);
+	Field(int,actionIndex1);
+	Field(short,funcIndex1);
+	Field(unsigned char,axisIndex1);
+	Field(unsigned char,handIndex1);
+	Field(int,actionIndex2);
+	Field(short,funcIndex2);
+	Field(unsigned char,axisIndex2);
+	Field(unsigned char,handIndex2);
+	Field(float, x);
+	Field(float, y);
+	Field(bool, override);
+	Field(bool, hasAxisMapping);
 };
+
 
 struct AppCustomAction
 {
 	constexpr static EventType type = EVENT_APP_CUSTOM_ACTION;
 	Field(unsigned long long,session);
 	Field(int, index);
-	StringField(command, 64);
-	StringField(condition, 64);
+	Field(int, cmdIndex);
+	Field(bool, hasCondition);
+	Field(bool, hasVariables);
 	Field(float, triggerPeriod);
+	Field(float, lastTrigger);
 };
 
 struct DiagMsg
