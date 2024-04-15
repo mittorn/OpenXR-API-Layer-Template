@@ -446,7 +446,7 @@ static struct AppConsole
 				AddLog("- %s", InternalCommands[i]);
 			AddLog("Client Commands:");
 			for (int i = 1; i < IM_ARRAYSIZE(gCommands); i++)
-				AddLog("- %s <%s>", gCommands[i].name, gCommands[i].sign);
+				AddLog("- %s (%s) %s", gCommands[i].name, gCommands[i].sign, gCommands[i].description);
 		}
 		else if (command_line.Equals("history"))
 		{
