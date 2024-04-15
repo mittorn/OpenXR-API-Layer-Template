@@ -611,9 +611,9 @@ constexpr static const char fld_name_##name[] = #name; \
 constexpr static const char fld_name_##name[] = #name; \
 	HashMapField_<Key, Value, fld_name_##name, sizeof(fld_name_##name) - 1> name
 
-void NameForKey(char (&keyname)[32], int key)
+void NameForKey(char (&keyname)[32], unsigned long long key)
 {
-	SBPrint(keyname, "%x", key);
+	SBPrint(keyname, "%16x", key);
 }
 
 void NameForKey(char (&keyname)[32], const SubStr &key)
@@ -670,6 +670,10 @@ struct AppSessionState
 {
 	AppSession mState;
 	HashMap<SubStr,AppActionSetState> mActionsSets;
+	HashMap<SubStr,AppSource> mSources[USER_PATH_COUNT + 1];
+	HashMap<unsigned long long, AppActionMap> mActionMaps[USER_PATH_COUNT];
+	HashMap<SubStr, AppRPN> mExpressions;
+	HashMap<int, AppCustomAction> mCustomActions;
 	bool show;
 	char mSessionName[32];
 	void SetName(int pid, unsigned long long handle)
@@ -687,7 +691,10 @@ struct AppState
 	int pid;
 	AppReg mReg;
 	HashMap<unsigned long long, AppSessionState> mSessions;
+	HashMap<SubStr, AppVar> mVariables;
 	char mAppName[64];
+	char mVarName[64];
+	bool showVars;
 
 	void SetName(const char *name)
 	{
@@ -695,10 +702,12 @@ struct AppState
 		{
 			SBPrint(mConsole.mWindowName, "%s (%d) - Console###CON_%d", name, pid, pid);
 			mConsole.show = true;
-		}
-		SBPrint(mAppName, "%s (%d)###APP_%d", name, pid, pid);
+
+			SBPrint(mAppName, "%s (%d)###APP_%d", name, pid, pid);
+			SBPrint(mVarName, "%s (%d) - Variables###APP_%d", name, pid, pid);
 
 		mConsole.mPid = pid;
+		}
 	}
 };
 
@@ -753,6 +762,30 @@ struct HandleApp
 	void Handle(const AppBinding &act) const
 	{
 		state.mSessions[act.session.val].mActionsSets[SubStrB(act.setName.val)].mActions[SubStrB(act.actName.val)].bindings[act.index] = act;
+		state.mSessions[act.session.val].SetName(pid, act.session.val);
+	}
+	void Handle(const AppVar &var) const
+	{
+		state.mVariables[SubStrB(var.name.val)] = var;
+	}
+	void Handle(const AppSource &src) const
+	{
+		state.mSessions[src.session.val].mSources[src.index][SubStrB(src.name.val)] = src;
+		state.mSessions[src.session.val].SetName(pid, src.session.val);
+	}
+	void Handle(const AppActionMap &map) const
+	{
+		state.mSessions[map.session.val].mActionMaps[map.hand][map.handle] = map;
+		state.mSessions[map.session.val].SetName(pid, map.session.val);
+	}
+	void Handle(const AppRPN &rpn) const
+	{
+		state.mSessions[rpn.session.val].mExpressions[SubStrB(rpn.source.val)] = rpn;
+		state.mSessions[rpn.session.val].SetName(pid, rpn.session.val);
+	}
+	void Handle(const AppCustomAction &act) const
+	{
+		state.mSessions[act.session.val].mCustomActions[act.index] = act;
 		state.mSessions[act.session.val].SetName(pid, act.session.val);
 	}
 };
@@ -815,7 +848,7 @@ struct ImGuiTableTreeDumper
 	}
 };
 
-
+static unsigned int gRequestFrames = 3;
 static struct Client
 {
 	int fd;
@@ -856,6 +889,7 @@ static struct Client
 		{
 			if(!(FD_ISSET(fd,&rfds) && (recv(fd, &p, sizeof(p), MSG_DONTWAIT) >= 0)))
 				return;
+			gRequestFrames = 4;
 			if(p.head.type == EVENT_APP_REGISTER)
 			{
 				AppState &s = gApps[p.head.sourcePid];
@@ -880,7 +914,15 @@ static void RunCommand(int pid, const Command &c)
 {
 	gClient.Send(c,TARGET_APP, pid);
 }
-
+constexpr const char *gUserDevNames[] =
+{
+	"Left",
+	"Right",
+	"Head",
+	"Gamepad",
+	"Auto",
+	"External"
+};
 
 #define SLEEP_ACTIVE 16666666
 #define SLEEP_SUBACTIVE 2500000
@@ -892,11 +934,12 @@ constexpr static long long sleepTimes[4]
 	16666666,
 	10000000,
 };
-void FrameControl(unsigned int requestFrames)
+
+void FrameControl()
 {
 	static unsigned long long lastTime;
 	unsigned long long time = GetTimeU64();
-	long long timeDiff = sleepTimes[requestFrames] - (time - lastTime);
+	long long timeDiff = sleepTimes[gRequestFrames] - (time - lastTime);
 	if(timeDiff <= 5000000)
 		timeDiff = 0;
 	gClient.RunFrame(timeDiff / 1000);
@@ -905,13 +948,28 @@ void FrameControl(unsigned int requestFrames)
 
 void DrawActionSetTab(AppSessionState &s)
 {
+	if(ImGui::Button("Get Application sets"))
+	{
+		Command cmd;
+		cmd.ctype = EVENT_POLL_DUMP_APP_BINDINGS;
+		cmd.datasize = 0;
+		gClient.Send(cmd);
+	}
+	ImGui::SameLine();
+	if(ImGui::Button("Get Layer sets"))
+	{
+		Command cmd;
+		cmd.ctype = EVENT_POLL_DUMP_LAYER_BINDINGS;
+		cmd.datasize = 0;
+		gClient.Send(cmd);
+	}
 	HASHMAP_FOREACH(s.mActionsSets, as)
 	{
 		ImGui::SetNextItemOpen(true, ImGuiCond_Once);
 		if(ImGui::CollapsingHeader(as->k.begin))
 		{
 			ImGui::PushID(as->k.begin);
-			if (ImGui::BeginTable("##split", 2, ImGuiTableFlags_BordersOuter| ImGuiTableFlags_RowBg))
+			if (ImGui::BeginTable("##split", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersOuter| ImGuiTableFlags_RowBg))
 			{
 				ImGui::TableSetupScrollFreeze(0, 1);
 				ImGui::TableSetupColumn("Object");
@@ -927,6 +985,150 @@ void DrawActionSetTab(AppSessionState &s)
 	}
 }
 
+void DrawSourcesTab(AppSessionState &s)
+{
+	if(ImGui::Button("Update"))
+	{
+		Command cmd;
+		cmd.ctype = EVENT_POLL_DUMP_SOURCES;
+		cmd.datasize = 0;
+		gClient.Send(cmd);
+	}
+	//ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+	//if(ImGui::CollapsingHeader("Sources dump"))
+	{
+		if (ImGui::BeginTable("##split", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersOuter| ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY))
+		{
+			ImGui::TableSetupScrollFreeze(0, 1);
+			ImGui::TableSetupColumn("Object");
+			ImGui::TableSetupColumn("Contents");
+			ImGui::TableHeadersRow();
+
+			for(int i = 0; i < USER_PATH_COUNT + 1; i++)
+			{
+				ImGuiTableTreeDumper d{gUserDevNames[i]};
+				if(s.mSources[i].Begin().n == nullptr)
+					continue;
+				d.startOpen = true;
+				d.Begin();
+				if(d.show)
+				HASHMAP_FOREACH(s.mSources[i], src)
+				{
+					char key[32];
+					ImGuiTableTreeDumper d2{key};
+					NameForKey(key, src->k);
+
+					DumpNamedStruct(d2, &src->v);
+				}
+				d.End();
+			}
+
+			ImGui::EndTable();
+		}
+	}
+}
+
+void DrawActionMapsTab(AppSessionState &s)
+{
+	if(ImGui::Button("Update"))
+	{
+		Command cmd;
+		cmd.ctype = EVENT_POLL_DUMP_ACTION_MAPS;
+		cmd.datasize = 0;
+		gClient.Send(cmd);
+	}
+	//ImGui::SetNextItemOpen(true, ImGuiCond_Once);
+	//if(ImGui::CollapsingHeader("Action maps dump"))
+	{
+		if (ImGui::BeginTable("##split", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersOuter| ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY))
+		{
+			ImGui::TableSetupScrollFreeze(0, 1);
+			ImGui::TableSetupColumn("Object");
+			ImGui::TableSetupColumn("Contents");
+			ImGui::TableHeadersRow();
+
+			for(int i = 0; i < USER_PATH_COUNT; i++)
+			{
+				ImGuiTableTreeDumper d{gUserDevNames[i]};
+				d.startOpen = true;
+				d.Begin();
+				if(d.show)
+				HASHMAP_FOREACH(s.mActionMaps[i], src)
+				{
+					char key[64];
+					ImGuiTableTreeDumper d2{key};
+					SBPrint(key, "%s##%x", src->v.actName.val, src->k);
+					d2.startOpen = src->v.override;
+					DumpNamedStruct(d2, &src->v);
+				}
+				d.End();
+			}
+
+			ImGui::EndTable();
+		}
+	}
+}
+
+
+void DrawExpressionsTab(AppSessionState &s)
+{
+	if(ImGui::Button("Update"))
+	{
+		Command cmd;
+		cmd.ctype = EVENT_POLL_DUMP_EXPRESSIONS;
+		cmd.datasize = 0;
+		gClient.Send(cmd);
+	}
+
+	if (ImGui::BeginTable("##split", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersOuter| ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY))
+	{
+		ImGui::TableSetupScrollFreeze(0, 1);
+		ImGui::TableSetupColumn("Object");
+		ImGui::TableSetupColumn("Contents");
+		ImGui::TableHeadersRow();
+
+
+		HASHMAP_FOREACH(s.mExpressions, src)
+		{
+			ImGuiTableTreeDumper d2{src->k.begin};
+			d2.startOpen = true;
+			DumpNamedStruct(d2, &src->v);
+		}
+
+		ImGui::EndTable();
+	}
+}
+
+void DrawCustomActionsTab(AppSessionState &s)
+{
+	if(ImGui::Button("Update"))
+	{
+		Command cmd;
+		cmd.ctype = EVENT_POLL_DUMP_CUSTOM_ACTIONS;
+		cmd.datasize = 0;
+		gClient.Send(cmd);
+	}
+
+	if (ImGui::BeginTable("##split", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersOuter| ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY))
+	{
+		ImGui::TableSetupScrollFreeze(0, 1);
+		ImGui::TableSetupColumn("Object");
+		ImGui::TableSetupColumn("Contents");
+		ImGui::TableHeadersRow();
+
+
+		HASHMAP_FOREACH(s.mCustomActions, src)
+		{
+			char key[32];
+			NameForKey(key, src->k);
+			ImGuiTableTreeDumper d2{key};
+			d2.startOpen = true;
+			DumpNamedStruct(d2, &src->v);
+		}
+
+		ImGui::EndTable();
+	}
+}
 
 void DrawSessionWindow(AppSessionState &s)
 {
@@ -938,8 +1140,60 @@ void DrawSessionWindow(AppSessionState &s)
 			DrawActionSetTab(s);
 			ImGui::EndTabItem();
 		}
+		if(ImGui::BeginTabItem("Sources"))
+		{
+			DrawSourcesTab(s);
+			ImGui::EndTabItem();
+		}
+		if(ImGui::BeginTabItem("Action maps"))
+		{
+			DrawActionMapsTab(s);
+			ImGui::EndTabItem();
+		}
+		if(ImGui::BeginTabItem("Expressions"))
+		{
+			DrawExpressionsTab(s);
+			ImGui::EndTabItem();
+		}
+		if(ImGui::BeginTabItem("Custom actions"))
+		{
+			DrawCustomActionsTab(s);
+			ImGui::EndTabItem();
+		}
 		ImGui::EndTabBar();
 	}
+	ImGui::End();
+}
+
+void DrawVariablesWindow(AppState &s)
+{
+
+	ImGui::Begin( s.mVarName, &s.showVars );
+	if(ImGui::Button("Update"))
+	{
+		Command cmd;
+		cmd.ctype = EVENT_POLL_DUMP_VARIABLES;
+		cmd.datasize = 0;
+		gClient.Send(cmd);
+	}
+	ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(2, 2));
+	if (ImGui::BeginTable("##split", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersOuter| ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY))
+	{
+		ImGui::TableSetupScrollFreeze(0, 1);
+		ImGui::TableSetupColumn("Object");
+		ImGui::TableSetupColumn("Contents");
+		ImGui::TableHeadersRow();
+
+		HASHMAP_FOREACH(s.mVariables, src)
+		{
+			ImGuiTableTreeDumper d{src->k.begin};
+			d.startOpen = true;
+			DumpNamedStruct(d, &src->v);
+		}
+
+		ImGui::EndTable();
+	}
+	ImGui::PopStyleVar();
 	ImGui::End();
 }
 
@@ -961,7 +1215,6 @@ int main(int argc, char **argv)
 		return 1;
 	bool done = false;
 	bool show_demo_window = false;
-	unsigned int requestFrames = 3;
 	bool frameSkipped = false;
 	SubStr("Console").CopyTo(gConsole.mWindowName);
 
@@ -970,12 +1223,12 @@ int main(int argc, char **argv)
 		bool hasEvents;
 		done = !Platform_ProcessEvents(hasEvents);
 		if(hasEvents)
-			requestFrames = 3;
-		if(requestFrames < 2)
+			gRequestFrames = 3;
+		if(gRequestFrames < 2)
 		{
-			FrameControl(requestFrames);
-			if(requestFrames)
-				requestFrames--;
+			FrameControl();
+			if(gRequestFrames)
+				gRequestFrames--;
 			frameSkipped = true;
 			continue;
 		}
@@ -998,9 +1251,36 @@ int main(int argc, char **argv)
 				{
 					ImGui::Checkbox("Console", &node->v.mConsole.show);
 					ImGui::TextUnformatted("Request dump:");
-					ImGui::Button("Session");ImGui::SameLine();
-					ImGui::Button("Variables");ImGui::SameLine();
-					ImGui::Button("Sources");
+					if(ImGui::Button("Session"))
+					{
+						Command cmd;
+						cmd.ctype = EVENT_POLL_DUMP_SESSION;
+						cmd.datasize = 0;
+						gClient.Send(cmd);
+					}
+					ImGui::SameLine();
+					if(ImGui::Button("Variables"))
+					{
+						Command cmd;
+						cmd.ctype = EVENT_POLL_DUMP_VARIABLES;
+						cmd.datasize = 0;
+						gClient.Send(cmd);
+						node->v.showVars = true;
+					}
+					if(ImGui::Button("Reload config"))
+					{
+						Command cmd;
+						cmd.ctype = EVENT_POLL_RELOAD_CONFIG;
+						cmd.datasize = 0;
+						gClient.Send(cmd);
+					}
+					if(ImGui::Button("Trigger reload bindings"))
+					{
+						Command cmd;
+						cmd.ctype = EVENT_POLL_TRIGGER_INTERACTION_PROFILE_CHANGED;
+						cmd.datasize = 0;
+						gClient.Send(cmd);
+					}
 					ImGuiTreeDumper d{"Registration info"};
 					DumpNamedStruct(d, &node->v.mReg);
 					HASHMAP_FOREACH(node->v.mSessions, ses)
@@ -1029,14 +1309,16 @@ int main(int argc, char **argv)
 			HASHMAP_FOREACH(node->v.mSessions, ses)
 				if(ses->v.show)
 					DrawSessionWindow(ses->v);
+			if(node->v.showVars)
+				DrawVariablesWindow(node->v);
 		}
 
 		ImGui::Render();
 		if(!frameSkipped)
 		{
 			Platform_Present(io);
-			FrameControl(requestFrames);
-			requestFrames--;
+			FrameControl();
+			gRequestFrames--;
 		}
 
 		frameSkipped = false;

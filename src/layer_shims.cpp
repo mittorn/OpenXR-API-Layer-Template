@@ -200,9 +200,9 @@ struct ActionSource
 {
 	void *priv;
 	int actionIndex;
-	uint8_t funcIndex;
-	uint8_t axisIndex;
-	uint8_t handIndex;
+	unsigned char funcIndex;
+	unsigned char axisIndex;
+	unsigned char handIndex;
 	float GetValue() const
 	{
 		return actionFuncs[funcIndex](priv, actionIndex, handIndex, axisIndex);
@@ -626,7 +626,16 @@ struct RPNToken
 		}
 		else if(mode == func)
 		{
-			snprintf(buf, len - 1, "func%d", d.func.index);
+			unsigned int funcidx = d.func.index >> 2;
+			unsigned int funcarr = d.func.index & 3;
+			if(funcarr == 0)
+				snprintf(buf, len - 1, "func%d_%s", funcarr, funcs0[funcidx].name.begin);
+			if(funcarr == 1)
+				snprintf(buf, len - 1, "func%d_%s", funcarr, funcs1[funcidx].name.begin);
+			if(funcarr == 2)
+				snprintf(buf, len - 1, "func%d_%s", funcarr, funcs2[funcidx].name.begin);
+			if(funcarr == 3)
+				snprintf(buf, len - 1, "func%d_%s", funcarr, funcs3[funcidx].name.begin);
 		}
 		else if(mode == var)
 		{
@@ -840,6 +849,10 @@ struct Layer
 		{
 			typedState[hand].currentState = baseState[hand].map.GetAxis(0);
 		}
+		float Get(int hand, int axis) const
+		{
+			return axis ? 0 : typedState[hand].currentState;
+		}
 	};
 
 	struct ActionFloat : Action
@@ -848,6 +861,10 @@ struct Layer
 		void Update(int hand)
 		{
 			typedState[hand].currentState = baseState[hand].map.GetAxis(0);
+		}
+		float Get(int hand, int axis) const
+		{
+			return axis ? 0 : typedState[hand].currentState;
 		}
 	};
 
@@ -858,6 +875,10 @@ struct Layer
 		{
 			typedState[hand].currentState.x = baseState[hand].map.GetAxis(0);
 			typedState[hand].currentState.y = baseState[hand].map.GetAxis(1);
+		}
+		float Get(int hand, int axis) const
+		{
+			return axis ? typedState[hand].currentState.y : typedState[hand].currentState.x;
 		}
 	};
 	struct RPNInstance
@@ -1251,6 +1272,30 @@ struct Layer
 
 		return nullptr;
 	}
+	template <typename T>
+	void SendActionMap(const T &a, int hand)
+	{
+		AppActionMap s;
+		s.session = (unsigned long long)mActiveSession;
+		s.handle = (unsigned long long)a.action;
+		s.hand = hand;
+		s.mapIndex = a.baseState[hand].map.actionIndex;
+		s.handIndex = a.baseState[hand].map.handIndex;
+		SubStrB(a.info.actionName).CopyTo(s.actName.val);
+		s.actionIndex1 = a.baseState[hand].map.src[0].actionIndex;
+		s.axisIndex1 = a.baseState[hand].map.src[0].axisIndex;
+		s.handIndex1 = a.baseState[hand].map.src[0].handIndex;
+		s.funcIndex1 = a.baseState[hand].map.src[0].funcIndex;
+		s.actionIndex2 = a.baseState[hand].map.src[1].actionIndex;
+		s.axisIndex2 = a.baseState[hand].map.src[1].axisIndex;
+		s.handIndex2 = a.baseState[hand].map.src[1].handIndex;
+		s.funcIndex2 = a.baseState[hand].map.src[1].funcIndex;
+		s.x = a.Get(hand, 0);
+		s.y = a.Get(hand, 1);
+		s.override = a.baseState[hand].override;
+		s.hasAxisMapping = a.baseState[hand].hasAxisMapping;
+		poller.Send(s, TARGET_CLI|TARGET_GUI);
+	}
 
 	void ProcessCommand(SessionState &w, const Command &cmd)
 	{
@@ -1311,6 +1356,8 @@ struct Layer
 				if(a)
 				{
 					SourceSection *s = config.sources.mSections.GetPtr(base);
+					if(!s)
+						break;
 					if((int)s->actionType == (int)a->info.actionType)
 						a->baseState[cmd.args[1].i].map.actionIndex = AddSourceToSession(w, a->info.actionType, s->h.name );
 					a->baseState[cmd.args[1].i].map.handIndex = HandFromConfig(*s, suf);
@@ -1403,6 +1450,68 @@ struct Layer
 				s.value = node->v;
 				poller.Send(s, TARGET_CLI|TARGET_GUI);
 			}
+		}
+		break;
+		case EVENT_POLL_DUMP_ACTION_MAPS:
+		{
+			HASHMAP_FOREACH(mpActiveSession->mActionsBoolean, node)
+				for(int hand = 0; hand < USER_PATH_COUNT; hand++)
+					SendActionMap(node->v, hand);
+			HASHMAP_FOREACH(mpActiveSession->mActionsFloat, node)
+				for(int hand = 0; hand < USER_PATH_COUNT; hand++)
+					SendActionMap(node->v, hand);
+			HASHMAP_FOREACH(mpActiveSession->mActionsVec2, node)
+				for(int hand = 0; hand < USER_PATH_COUNT; hand++)
+					SendActionMap(node->v, hand);
+		}
+		break;
+		case EVENT_POLL_DUMP_EXPRESSIONS:
+		{
+			HASHMAP_FOREACH(mpActiveSession->mRPNs, node)
+			{
+
+				AppRPN s;
+				node->k.CopyTo(s.source.val);
+				s.session = (unsigned long long)mActiveSession;
+				int pos = 0;
+				for(int i = 0; i < node->v.data.count;i++)
+				{
+					char token[32];
+					node->v.data[i].Stringify(token, 31);
+					int len = strlen(token);
+					if(pos + len > 62)
+						break;
+					memcpy(&s.rpn.val[pos], token, len);
+					pos += len;
+					s.rpn.val[pos++] = ' ';
+				}
+				poller.Send(s, TARGET_CLI|TARGET_GUI);
+			}
+		}
+		break;
+		case EVENT_POLL_DUMP_CUSTOM_ACTIONS:
+		{
+			for(int i = 0; i < mpActiveSession->mCustomActions.count; i++)
+			{
+				CustomAction &a = mpActiveSession->mCustomActions[i];
+				AppCustomAction s;
+				s.lastTrigger = ((double)a.mLastTrigger)/1e9;
+				s.cmdIndex = a.cmd.ctype;
+				s.triggerPeriod = ((double)a.mTriggerPeriod)/1e9;
+				s.index = i;
+				s.hasCondition = a.pRPN && a.pRPN->data.count;
+				s.hasVariables = !!a.pRPN && a.pRPN->next;
+				s.session =(unsigned long long) mActiveSession;
+				poller.Send(s, TARGET_CLI|TARGET_GUI);
+			}
+		}
+		break;
+		case EVENT_POLL_DUMP_SESSION:
+		{
+			AppSession s;
+			s.handle = (unsigned long long)mActiveSession;
+			s.state = -1;
+			poller.Send(s, TARGET_CLI|TARGET_GUI);
 		}
 		default:
 			break;

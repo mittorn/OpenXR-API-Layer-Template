@@ -326,25 +326,6 @@ struct CustomActionSection
 	} vars;
 };
 
-static constexpr const char *const gszUserSuffixes[] =
-	{
-		"left",
-		"right",
-		"head",
-		"gamepad",
-		//"/user/treadmill"
-};
-
-
-enum eUserPaths{
-	USER_HAND_LEFT = 0,
-	USER_HAND_RIGHT,
-	USER_HEAD,
-	USER_GAMEPAD,
-	USER_INVALID,
-	USER_PATH_COUNT
-};
-
 static int PathIndexFromSuffix(const SubStr &suffix)
 {
 	int i;
