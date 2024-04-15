@@ -57,7 +57,7 @@ constexpr static struct CommandDef
 	{"reloadConfig", ""},
 	{"setExternalSource","sif"},
 	{"mapDirectSource","sis"},
-	{"mapAxis","sisi"},
+	{"mapAxis","siis"},
 	{"mapAction","ssi"},
 	{"resetAction","s"},
 	{"setProfile","s"},
@@ -124,8 +124,8 @@ struct Command : CommandHeader
 				if(gCommands[i].sign.begin[j] == 'i')
 					args[j].i = atoi(s0.begin);
 				if(gCommands[i].sign.begin[j] == 'f')
-					args[j].i = atof(s0.begin);
-				si = s0;
+					args[j].f = atof(s0.begin);
+				si = sn;
 			}
 			ctype = (CommandType)i;
 		}
