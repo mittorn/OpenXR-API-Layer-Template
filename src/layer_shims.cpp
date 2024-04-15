@@ -137,6 +137,18 @@ struct EventPoller
 		if(p.head.type != EVENT_COMMAND)
 			return;
 		Lock l{pollLock};
+		Log("%s\n", gCommands[p.data.cmd.ctype].name);
+		for(int j = 0; j < gCommands[p.data.cmd.ctype].sign.Len();j++)
+		{
+			if(gCommands[p.data.cmd.ctype].sign.begin[j] == 's')
+				Log("%s\n", p.data.cmd.Str(j));
+			if(gCommands[p.data.cmd.ctype].sign.begin[j] == 'i')
+				Log("%d\n", p.data.cmd.args[j].i);
+			if(gCommands[p.data.cmd.ctype].sign.begin[j] == 'f')
+				Log("%fn", p.data.cmd.args[j].f);
+		}
+
+
 		pollEvents.Enqueue(p.data.cmd);
 	}
 	void Run()
@@ -885,6 +897,7 @@ struct Layer
 	{
 		GrowArray<RPNToken> data;
 		RPNInstance *next = nullptr;
+		int index = -1;
 	};
 
 	struct CustomAction
@@ -1359,8 +1372,18 @@ struct Layer
 					if(!s)
 						break;
 					if((int)s->actionType == (int)a->info.actionType)
+					{
 						a->baseState[cmd.args[1].i].map.actionIndex = AddSourceToSession(w, a->info.actionType, s->h.name );
-					a->baseState[cmd.args[1].i].map.handIndex = HandFromConfig(*s, suf);
+						a->baseState[cmd.args[1].i].map.handIndex = HandFromConfig(*s, suf);
+						a->baseState[cmd.args[1].i].hasAxisMapping = false;
+					}
+					else
+					{
+						DiagMsg m;
+						SBPrint(m.message.val, "Source actionType %d must be equal target actionType %d\n",(int)s->actionType, (int)a->info.actionType);
+						poller.Send(m, TARGET_CLI|TARGET_GUI);
+					}
+
 				}
 			}
 		break;
@@ -1368,7 +1391,7 @@ struct Layer
 		{
 				Action *a = FindAppSessionAction(w,cmd.Str(0));
 				if(a)
-					AxisFromConfig(*a, cmd.args[1].i, cmd.Str(2), cmd.args[3].i, w);
+					AxisFromConfig(*a, cmd.args[1].i, cmd.Str(3), cmd.args[2].i, w);
 		}
 		break;
 		case EVENT_POLL_DUMP_SOURCES:
@@ -1765,13 +1788,15 @@ struct Layer
 		s.axisIndex = mapping.Contains( "[1]");
 		return ret;
 	}
-	RPNInstance *AddRPN(SessionState &w, const SubStr &source)
+	RPNInstance *AddRPN(SessionState &w, const SubStr &source, const SubStr key)
 	{
 		GrowArray<RPNToken> tokens;
 		if(!ParseTokens(&w, tokens, source.begin, source.Len()))
 			return nullptr;
-		RPNInstance &inst = w.mRPNs[source];
-		if(!ShuntingYard(tokens, inst.data))
+		RPNInstance &inst = w.mRPNs[key];
+		if(inst.index > 0)
+			return &inst;
+		if(!inst.data.count && !ShuntingYard(tokens, inst.data))
 			return nullptr;
 		return &inst;
 	}
@@ -1781,12 +1806,13 @@ struct Layer
 		SourceSection *c = SourceFromConfig(mapping, a.baseState[hand].map.src[axis].handIndex);
 		if(!c)
 		{
-			RPNInstance *inst = AddRPN(w, mapping);
+			RPNInstance *inst = AddRPN(w, mapping, mapping);
 			if(!inst)
 				return;
 			a.baseState[hand].map.src[axis].actionIndex = w.mRPNPointers.count;
 			a.baseState[hand].map.src[axis].funcIndex = 4;
 			a.baseState[hand].map.src[axis].priv = &w;
+			inst->index = w.mRPNPointers.count;
 			w.mRPNPointers.Add(inst);
 			a.baseState[hand].hasAxisMapping = true;
 			return;
@@ -1836,19 +1862,23 @@ struct Layer
 			CustomActionSection *s = p->actionMaps.customActions[i];
 			if(s)
 			{
+				char key[64];
+				SBPrint(key, "%s.cond", s->h.name);
 				CustomAction a = {nullptr, 0, (unsigned long long)((((double)s->period.val) * 1e9)), false};
 				if(s->condition.val.Len())
-					a.pRPN = AddRPN(w,s->condition.val);
+					a.pRPN = AddRPN(w,s->condition.val, SubStrB(key));
 				if(s->vars.vars.count )
 				{
 					if(!s->condition.val.Len())
-						a.pRPN = AddRPN(w,"1");
+						a.pRPN = AddRPN(w,"1",SubStrB(key) );
 					if(a.pRPN)
 					{
+						SBPrint(key, "%s.var%d", s->h.name, i);
 						RPNInstance *prev = a.pRPN;
 						for(int i = 0; i < s->vars.vars.count; i++)
 						{
-							prev->next = AddRPN(w, s->vars.vars[i]);
+
+							prev->next = AddRPN(w, s->vars.vars[i], SubStrB(key));
 							if(prev->next)
 								prev = prev->next;
 						}
