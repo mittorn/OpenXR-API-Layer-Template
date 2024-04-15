@@ -39,17 +39,46 @@ int Send(int fd, const T &data, unsigned char target = 0xF, pid_t targetPid = 0)
 	return send(fd,&p, ((char*)&p.data - (char*)&p) + sizeof(data), 0);
 }
 
+void PrintHelp()
+{
+	Log("Commands:\n");
+	for (int i = 1; i < sizeof(gCommands)/sizeof(gCommands[0]); i++)
+		Log("- %s (%s) %s\n", gCommands[i].name, gCommands[i].sign, gCommands[i].description);
+}
 
 int main(int argc, char **argv)
 {
 	if(argc < 2)
+	{
+		Log("Usage %s <port> [<pid>] [<command>]\n\nRunning without command enables interactive mode\n", argv[0]);
+		PrintHelp();
 		return 0;
+	}
+	unsigned short port = atoi(argv[1]);
+	int pid = 0;
+	if(argc > 2)
+		pid = atoi(argv[2]);
+	if(pid)
+		argc--, argv++;
 	int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	sockaddr_in addr;
 	addr.sin_family = AF_INET;
 	addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-	addr.sin_port = htons(atoi(argv[1]));
+	addr.sin_port = htons(port);
 	connect(fd, (sockaddr*)&addr, sizeof(addr));
+	if(argc > 2)
+	{
+		Command c = Command(SubStrL(argv[2]),
+				argc>3?SubStrL(argv[3]):SubStr{nullptr, nullptr},
+				argc>4?SubStrL(argv[4]):SubStr{nullptr, nullptr},
+				argc>5?SubStrL(argv[5]):SubStr{nullptr, nullptr},
+				argc>6?SubStrL(argv[6]):SubStr{nullptr, nullptr});
+		if(c.ctype != EVENT_POLL_NULL)
+			Send(fd,c,TARGET_APP, pid);
+		else
+			Log("Invalid command\n");
+		return c.ctype == EVENT_POLL_NULL;
+	}
 	ClientReg reg = {false};
 	Send(fd, reg);
 	EventPacket p;
@@ -78,7 +107,9 @@ int main(int argc, char **argv)
 				pos = 0;
 				Command c = Command(s);
 				if(c.ctype != EVENT_POLL_NULL)
-					Send(fd,c,TARGET_APP, 0);
+					Send(fd,c,TARGET_APP, pid);
+				else if(s.Equals("help"))
+					PrintHelp();
 				else
 					Log("Invalid command\n");
 			}

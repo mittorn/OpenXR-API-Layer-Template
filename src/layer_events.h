@@ -50,25 +50,26 @@ constexpr static struct CommandDef
 {
 	SubStr name;
 	SubStr sign;
+	SubStr description;
 } gCommands[] =
 {
-	{"", ""},
-	{"triggerInteractionProfileChanged", ""},
-	{"reloadConfig", ""},
-	{"setExternalSource","sif"},
-	{"mapDirectSource","sis"},
-	{"mapAxis","siis"},
-	{"mapAction","ssi"},
-	{"resetAction","s"},
-	{"setProfile","s"},
-	{"dumpAppBindings",""},
-	{"dumpLayerBindings",""},
-	{"dumpSources",""},
-	{"dumpVariables",""},
-	{"dumpActionMaps",""},
-	{"dumpExpressions",""},
-	{"dumpCustomActions",""},
-	{"dumpSession",""},
+	{"", "", ""},
+	{"triggerInteractionProfileChanged", "", "\nSimulate Interaction Profile switch.\nMay trigger app to restart session/bindings\nMay be useful to reload bindings from config"},
+	{"reloadConfig", "", "\nReload configuration from file.\nResets all runtime binding changes, but keeps variables and sources"},
+	{"setExternalSource","sif", "<source name> <axis> <value>\nSets value of source marked with action_external\nUseful for external scripting"},
+	{"mapDirectSource","sis", "<action name> <controller index> <source mapping>[.<source_controller>]\nMap action to same-type source\nThe most cahce-friendly way"},
+	{"mapAxis","siis", "<action name> <controller index> <axis index> <mapping expression>\nMap action axis to any source or calculated expression"},
+	{"mapAction","sis", "<action name> <controller index> <actionmap name>\nMap action to actionmap section in config"},
+	{"resetAction","s", "<action name>\nRe-apply action definition from config"},
+	{"setProfile","s", "<profile name>\nApply maps and custom actions based on config profile section"},
+	{"dumpAppBindings","", "\nDump action sets created by App and it's active bindings"},
+	{"dumpLayerBindings","", "\nDump action sets created by Layer and it's active bindings"},
+	{"dumpSources","", "\nDump active layer sources and it's values"},
+	{"dumpVariables","", "\nDump variables and values"},
+	{"dumpActionMaps","", "\nDump active bound actionmaps and current values"},
+	{"dumpExpressions","","\nDump Expressions internal RPN representation"},
+	{"dumpCustomActions","", "\nDump custom action trigger time and period"},
+	{"dumpSession","", "\nDump session handle. Session state is only sent when it's changed"},
 };
 
 
@@ -102,6 +103,15 @@ struct Command : CommandHeader
 		datasize += len;
 		args[arg].offsets[1] = datasize;
 	}
+	void _ParseArg(int j, const SubStr &s0, char c)
+	{
+		if(c == 's')
+			_AddStr(s0, j);
+		if(c == 'i')
+			args[j].i = atoi(s0.begin);
+		if(c == 'f')
+			args[j].f = atof(s0.begin);
+	}
 	Command(const SubStr &s)
 	{
 		datasize = 0;
@@ -117,17 +127,40 @@ struct Command : CommandHeader
 			{
 				if(!si.begin)
 					return;
-				if(!si.Split2(s0, sn, ' '))
+				if( ( j == gCommands[i].sign.Len() - 1 ) || !si.Split2( s0, sn, ' ' ))
 					s0 = si, sn = {nullptr, nullptr};
-				if(gCommands[i].sign.begin[j] == 's')
-					_AddStr(s0, j);
-				if(gCommands[i].sign.begin[j] == 'i')
-					args[j].i = atoi(s0.begin);
-				if(gCommands[i].sign.begin[j] == 'f')
-					args[j].f = atof(s0.begin);
+				_ParseArg(j, s0, gCommands[i].sign.begin[j]);
 				si = sn;
 			}
 			ctype = (CommandType)i;
+			return;
+		}
+	}
+	Command(const SubStr &cmd, const SubStr &arg0, const SubStr &arg1, const SubStr &arg2, const SubStr &arg3)
+	{
+		for(int i = 1; i < sizeof(gCommands) / sizeof(gCommands[0]);i++)
+		{
+			if(!cmd.Equals(gCommands[i].name))
+				continue;
+			int l = gCommands[i].sign.Len();
+			if(!arg0.begin && l > 0)
+				return;
+			if(l > 0)
+				_ParseArg(0, arg0, gCommands[i].sign.begin[0] );
+			if(!arg1.begin && l > 1)
+				return;
+			if(l > 1)
+				_ParseArg(1, arg1, gCommands[i].sign.begin[1] );
+			if(!arg2.begin && l > 2)
+				return;
+			if(l > 2)
+				_ParseArg(2, arg2, gCommands[i].sign.begin[2] );
+			if(!arg3.begin && l > 3)
+				return;
+			if(l > 3)
+				_ParseArg(3, arg3, gCommands[i].sign.begin[3] );
+			ctype = (CommandType)i;
+			return;
 		}
 	}
 
