@@ -235,7 +235,6 @@ static struct AppConsole
 		HistoryPos = -1;
 		AutoScroll = true;
 		ScrollToBottom = false;
-		AddLog("Welcome to Dear ImGui!");
 	}
 	~AppConsole()
 	{
@@ -243,12 +242,6 @@ static struct AppConsole
 		for (int i = 0; i < History.Size; i++)
 			History[i].Free();
 	}
-
-	// Portable helpers
-	//static int   Stricmp(const char* s1, const char* s2)         { int d; while ((d = toupper(*s2) - toupper(*s1)) == 0 && *s1) { s1++; s2++; } return d; }
-	//static int   Strnicmp(const char* s1, const char* s2, int n) { int d = 0; while (n > 0 && (d = toupper(*s2) - toupper(*s1)) == 0 && *s1) { s1++; s2++; n--; } return d; }
-	//static char* Strdup(const char* s)                           { IM_ASSERT(s); size_t len = strlen(s) + 1; void* buf = ImGui::MemAlloc(len); IM_ASSERT(buf); return (char*)memcpy(buf, (const void*)s, len); }
-	//static void  Strtrim(char* s)                                { char* str_end = s + strlen(s); while (str_end > s && str_end[-1] == ' ') str_end--; *str_end = 0; }
 
 	void ClearLog()
 	{
@@ -294,21 +287,9 @@ static struct AppConsole
 			ImGui::EndPopup();
 		}
 
-		ImGui::TextWrapped(
-			"This example implements a console with basic coloring, completion (TAB key) and history (Up/Down keys). A more elaborate "
-			"implementation may want to store entries along with extra data such as timestamp, emitter, etc.");
-		ImGui::TextWrapped("Enter 'HELP' for help.");
-
-		// TODO: display items starting from the bottom
-
-		if (ImGui::SmallButton("Add Debug Text"))  { AddLog("%d some text", Items.Size); AddLog("some more text"); AddLog("display very important message here!"); }
-		ImGui::SameLine();
-		if (ImGui::SmallButton("Add Debug Error")) { AddLog("[error] something went wrong"); }
-		ImGui::SameLine();
 		if (ImGui::SmallButton("Clear"))           { ClearLog(); }
 		ImGui::SameLine();
 		bool copy_to_clipboard = ImGui::SmallButton("Copy");
-		//static float t = 0.0f; if (ImGui::GetTime() - t > 0.02f) { t = ImGui::GetTime(); AddLog("Spam %f", t); }
 
 		ImGui::Separator();
 
@@ -335,31 +316,6 @@ static struct AppConsole
 				if (ImGui::Selectable("Clear")) ClearLog();
 				ImGui::EndPopup();
 			}
-
-			// Display every line as a separate entry so we can change their color or add custom widgets.
-			// If you only want raw text you can use ImGui::TextUnformatted(log.begin(), log.end());
-			// NB- if you have thousands of entries this approach may be too inefficient and may require user-side clipping
-			// to only process visible items. The clipper will automatically measure the height of your first item and then
-			// "seek" to display only items in the visible area.
-			// To use the clipper we can replace your standard loop:
-			//      for (int i = 0; i < Items.Size; i++)
-			//   With:
-			//      ImGuiListClipper clipper;
-			//      clipper.Begin(Items.Size);
-			//      while (clipper.Step())
-			//         for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; i++)
-			// - That your items are evenly spaced (same height)
-			// - That you have cheap random access to your elements (you can access them given their index,
-			//   without processing all the ones before)
-			// You cannot this code as-is if a filter is active because it breaks the 'cheap random-access' property.
-			// We would need random-access on the post-filtered list.
-			// A typical application wanting coarse clipping and filtering may want to pre-compute an array of indices
-			// or offsets of items that passed the filtering test, recomputing this array when user changes the filter,
-			// and appending newly elements as they are inserted. This is left as a task to the user until we can manage
-			// to improve this example code!
-			// If your items are of variable height:
-			// - Split them into same height items would be simpler and facilitate random-seeking into your list.
-			// - Consider using manual call to IsRectVisible() and skipping extraneous decoration from your items.
 			ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4, 1)); // Tighten spacing
 			if (copy_to_clipboard)
 				ImGui::LogToClipboard();
@@ -492,6 +448,11 @@ static struct AppConsole
 					if (c == ' ' || c == '\t' || c == ',' || c == ';')
 						break;
 					word_start--;
+				}
+
+				if(word_start != data->Buf)
+				{
+					break;
 				}
 
 				// Build a list of candidates
@@ -851,9 +812,11 @@ struct ImGuiTableTreeDumper
 static unsigned int gRequestFrames = 3;
 static struct Client
 {
-	int fd;
-	bool Start(int port)
+	int fd  = -1;
+	bool Connect(int port)
 	{
+		if(fd >= 0)
+			close(fd);
 		fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 		sockaddr_in addr;
 		addr.sin_family = AF_INET;
@@ -867,6 +830,8 @@ static struct Client
 	template <typename T>
 	int Send(const T &data, unsigned char target = 0xF, pid_t targetPid = 0)
 	{
+		if(fd < 0)
+			return -1;
 		EventPacket p;
 		p.head.sourcePid = getpid();
 		SubStr("client_simple").CopyTo(p.head.displayName);
@@ -878,6 +843,11 @@ static struct Client
 	}
 	void RunFrame(unsigned int time)
 	{
+		if(fd < 0)
+		{
+			usleep(time);
+			return;
+		}
 		EventPacket p;
 		struct timeval tv;
 		fd_set rfds;
@@ -1200,9 +1170,12 @@ void DrawVariablesWindow(AppState &s)
 
 int main(int argc, char **argv)
 {
-	if(argc < 2)
-		return 0;
-	gClient.Start(atoi(argv[1]));
+	int port = 0;
+	if(argc >= 2)
+	{
+		port = atoi(argv[1]);
+		gClient.Connect(port);
+	}
 	// Setup Dear ImGui context
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
@@ -1238,6 +1211,11 @@ int main(int argc, char **argv)
 			ImGui::ShowDemoWindow(&show_demo_window);
 		ImGui::SetNextWindowSize(ImVec2(400,200), ImGuiCond_FirstUseEver);
 		ImGui::Begin("Client");
+		ImGui::InputInt("Port", &port);ImGui::SameLine();
+		if(ImGui::Button("Connect"))
+		{
+			gClient.Connect(port);
+		}
 		ImGui::Checkbox("Demo", &show_demo_window);
 		ImGui::Checkbox("Global console", &gConsole.show);
 		//bool showApps = true;
